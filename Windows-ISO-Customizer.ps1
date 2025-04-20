@@ -1,10 +1,11 @@
+# Définir l'encodage UTF-8 immédiatement pour gérer les accents
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+chcp 65001 | Out-Null
+
 #requires -RunAsAdministrator
 # Script PowerShell pour télécharger et personnaliser une ISO Windows 10/11
 # Nécessite une connexion Internet et 20 Go d'espace libre sur C:
-
-# Définir l'encodage de la console PowerShell en UTF-8 pour gérer les accents
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
 # Vérifier les privilèges administrateur et relancer en mode admin si nécessaire
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -46,9 +47,9 @@ if ($drive.AvailableFreeSpace -lt 20GB) {
 # Vérifier la connexion Internet
 Log-Message "Vérification de la connexion Internet..." -Step "Vérification de la connexion"
 try {
-    Test-Connection -ComputerName google.com -Count 1 -ErrorAction Stop | Out-Null
+    Test-Connection -ComputerName www.microsoft.com -Count 1 -ErrorAction Stop | Out-Null
 } catch {
-    Write-Error "Connexion Internet requise pour télécharger l'ISO et les mises à jour."
+    Write-Error "Connexion Internet requise pour télécharger l'ISO et les mises à jour. Vérifiez votre connexion ou désactivez tout VPN/proxy."
     exit 1
 }
 
@@ -112,7 +113,11 @@ try {
     Invoke-WebRequest -Uri $downloadUrl -OutFile $isoPath -ErrorAction Stop
 } catch {
     Log-Message "Échec du téléchargement automatique de l'ISO via Fido : $($_.Exception.Message)"
-    Write-Warning "Téléchargement automatique échoué. Veuillez télécharger l'ISO manuellement depuis https://www.microsoft.com/software-download."
+    Write-Warning "Échec du téléchargement. Causes possibles : VPN/proxy actif, restrictions géographiques, ou limitations Microsoft (erreur 715-123130)."
+    Write-Warning "Veuillez télécharger l'ISO manuellement depuis :"
+    Write-Warning "- Windows 10 : https://www.microsoft.com/fr-fr/software-download/windows10"
+    Write-Warning "- Windows 11 : https://www.microsoft.com/fr-fr/software-download/windows11"
+    Write-Warning "Si vous utilisez un VPN, désactivez-le et réessayez."
     $isoPath = Read-Host "Entrez le chemin de l'ISO téléchargée (ex. : C:\ISO\Win11.iso)"
     if (-not (Test-Path $isoPath) -or $isoPath -notmatch "\.iso$") {
         Write-Error "Chemin de l'ISO invalide."
@@ -165,7 +170,7 @@ if (-not $selectedConfig) {
 $config = $selectedConfig.Name.Split(" ")[0]
 
 # Configuration du compte local
-$accountName = Read-Host "Nom du compte local administrateur"
+$accountName = Read-Host "Nom du compte local administrateur (ex. : Jérôme)"
 if ($accountName -match '[<>:\"/\\|?*]') {
     Write-Error "Nom de compte invalide (caractères interdits : <>:`"/\\|?*)."
     exit 1
@@ -362,7 +367,7 @@ reg add "HKLM\Mounted\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "Sh
 reg unload HKLM\Mounted
 reg unload HKLM\MountedSystem
 
-# Création du fichier unattend.xml avec encodage UTF-8
+# Création du fichier unattend.xml avec encodage UTF-8 BOM
 Log-Message "Création du fichier unattend.xml..." -Step "Création du fichier unattend"
 Update-Progress -Percent 70
 $passwordSection = if ($passwordPlain) {
@@ -413,7 +418,16 @@ $unattend = @"
     </settings>
 </unattend>
 "@
-$unattend | Out-File -FilePath "$tempDir\unattend.xml" -Encoding utf8
+# Écrire le fichier avec UTF-8 BOM pour garantir la compatibilité des accents
+$utf8BomEncoding = New-Object System.Text.UTF8Encoding($true)
+[System.IO.File]::WriteAllText("$tempDir\unattend.xml", $unattend, $utf8BomEncoding)
+
+# Vérifier les accents dans unattend.xml
+Log-Message "Vérification des accents dans unattend.xml..." -Step "Vérification des accents"
+$unattendContent = Get-Content -Path "$tempDir\unattend.xml" -Raw
+if ($unattendContent -notmatch $accountName) {
+    Write-Warning "Les accents dans le nom d'utilisateur ($accountName) peuvent ne pas être corrects dans unattend.xml. Vérifiez le fichier."
+}
 
 # Démontage de l'image
 Log-Message "Démontage de l'image..." -Step "Démontage"
