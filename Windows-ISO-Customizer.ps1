@@ -2,6 +2,19 @@
 # Script PowerShell pour télécharger et personnaliser une ISO Windows 10/11
 # Nécessite une connexion Internet et 20 Go d'espace libre sur C:
 
+# Définir l'encodage de la console PowerShell en UTF-8 pour gérer les accents
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
+
+# Vérifier les privilèges administrateur et relancer en mode admin si nécessaire
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Warning "Ce script doit être exécuté en mode administrateur. Tentative de relance avec élévation..."
+    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`""
+    Start-Process powershell -Verb RunAs -ArgumentList $arguments
+    exit
+}
+
 # Configuration des logs
 $logPath = "C:\Output\CustomizationLog.txt"
 $ErrorActionPreference = "Stop"
@@ -21,14 +34,6 @@ function Log-Message {
 function Update-Progress {
     param($Percent)
     Write-Host "Progression : $Percent%" -ForegroundColor Yellow
-}
-
-# Vérifier les privilèges administrateur
-Log-Message "Vérification des privilèges administrateur..." -Step "Vérification des prérequis"
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Error "Ce script doit être exécuté en mode administrateur."
-    exit 1
 }
 
 # Vérifier l'espace disque
@@ -357,7 +362,7 @@ reg add "HKLM\Mounted\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "Sh
 reg unload HKLM\Mounted
 reg unload HKLM\MountedSystem
 
-# Création du fichier unattend.xml
+# Création du fichier unattend.xml avec encodage UTF-8
 Log-Message "Création du fichier unattend.xml..." -Step "Création du fichier unattend"
 Update-Progress -Percent 70
 $passwordSection = if ($passwordPlain) {
@@ -375,13 +380,13 @@ $wallpaperCommand = if ($wallpaperPath) {
     "%WINDIR%\Web\Wallpaper\Windows\img0.jpg"
 }
 $unattend = @"
-<?xml version='1.0' encoding='utf-8'?>
-<unattend xmlns='urn:schemas-microsoft-com:unattend'>
-    <settings pass='oobeSystem'>
-        <component name='Microsoft-Windows-Shell-Setup' processorArchitecture='amd64' publicKeyToken='31bf3856ad364e35' language='neutral' versionScope='nonSxS' xmlns:wcm='http://schemas.microsoft.com/WMIConfig/2002/State'>
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+    <settings pass="oobeSystem">
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
             <UserAccounts>
                 <LocalAccounts>
-                    <LocalAccount wcm:action='add'>
+                    <LocalAccount wcm:action="add">
                         <Name>$accountName</Name>
                         $passwordSection
                         <Group>Administrators</Group>
@@ -399,7 +404,7 @@ $unattend = @"
                 <DesktopBackground>$wallpaperCommand</DesktopBackground>
             </Themes>
         </component>
-        <component name='Microsoft-Windows-International-Core' processorArchitecture='amd64' publicKeyToken='31bf3856ad364e35' language='neutral' versionScope='nonSxS'>
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
             <InputLocale>$language</InputLocale>
             <SystemLocale>$language</SystemLocale>
             <UILanguage>$language</UILanguage>
