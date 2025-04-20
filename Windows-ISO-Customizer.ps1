@@ -1,10 +1,12 @@
-# CustomWindowsISO.ps1
+# CustomWindowsISO_Updated.ps1
 # Script PowerShell pour personnaliser une ISO Windows avec message de conseil dans WinPE
+# Corrections : mode hors ligne par défaut, encodage UTF-8, plus de langues, police compatible
 
-# Définir l'encodage UTF-8 globalement
+# Forcer l'encodage UTF-8 globalement
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+chcp 65001 | Out-Null # Forcer UTF-8 dans la console
 
 #requires -RunAsAdministrator
 
@@ -26,6 +28,7 @@ function Log-Message {
         [string]$Message,
         [string]$Step
     )
+    chcp 65001 | Out-Null # Assurer l'encodage UTF-8 pour chaque log
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "[$timestamp] $Step : $Message"
     Write-Host $logEntry
@@ -55,7 +58,7 @@ function Invoke-WebRequestWithRetry {
             return $response
         }
         catch {
-            Write-Host "Tentative $i/$Retries échouée : $_" -ForegroundColor Yellow
+            Log-Message "Tentative $i/$Retries échouée : $_" -Step "Téléchargement"
             if ($i -lt $Retries) { Start-Sleep -Seconds $Delay }
             else { throw $_ }
         }
@@ -81,12 +84,14 @@ $form = New-Object System.Windows.Forms.Form
 $form.Text = "Personnalisation ISO Windows"
 $form.Size = New-Object System.Drawing.Size(800, 600)
 $form.StartPosition = "CenterScreen"
+$form.Font = New-Object System.Drawing.Font("Segoe UI", 10) # Police compatible UTF-8
 
 # Éléments de l'interface
 $versionLabel = New-Object System.Windows.Forms.Label
 $versionLabel.Location = New-Object System.Drawing.Point(10, 20)
 $versionLabel.Size = New-Object System.Drawing.Size(150, 20)
 $versionLabel.Text = "Version de Windows :"
+$versionLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($versionLabel)
 
 $versionComboBox = New-Object System.Windows.Forms.ComboBox
@@ -94,12 +99,14 @@ $versionComboBox.Location = New-Object System.Drawing.Point(160, 20)
 $versionComboBox.Size = New-Object System.Drawing.Size(200, 20)
 $versionComboBox.Items.AddRange(@("Windows 10", "Windows 11"))
 $versionComboBox.SelectedIndex = 0
+$versionComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($versionComboBox)
 
 $architectureLabel = New-Object System.Windows.Forms.Label
 $architectureLabel.Location = New-Object System.Drawing.Point(10, 50)
 $architectureLabel.Size = New-Object System.Drawing.Size(150, 20)
 $architectureLabel.Text = "Architecture :"
+$architectureLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($architectureLabel)
 
 $architectureComboBox = New-Object System.Windows.Forms.ComboBox
@@ -107,12 +114,14 @@ $architectureComboBox.Location = New-Object System.Drawing.Point(160, 50)
 $architectureComboBox.Size = New-Object System.Drawing.Size(200, 20)
 $architectureComboBox.Items.AddRange(@("x64", "ARM64"))
 $architectureComboBox.SelectedIndex = 0
+$architectureComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($architectureComboBox)
 
 $releaseLabel = New-Object System.Windows.Forms.Label
 $releaseLabel.Location = New-Object System.Drawing.Point(10, 80)
 $releaseLabel.Size = New-Object System.Drawing.Size(150, 20)
 $releaseLabel.Text = "Release :"
+$releaseLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($releaseLabel)
 
 $releaseComboBox = New-Object System.Windows.Forms.ComboBox
@@ -120,25 +129,33 @@ $releaseComboBox.Location = New-Object System.Drawing.Point(160, 80)
 $releaseComboBox.Size = New-Object System.Drawing.Size(200, 20)
 $releaseComboBox.Items.AddRange(@("Latest", "21H2", "22H2"))
 $releaseComboBox.SelectedIndex = 0
+$releaseComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($releaseComboBox)
 
 $languageLabel = New-Object System.Windows.Forms.Label
 $languageLabel.Location = New-Object System.Drawing.Point(10, 110)
 $languageLabel.Size = New-Object System.Drawing.Size(150, 20)
 $languageLabel.Text = "Langue :"
+$languageLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($languageLabel)
 
 $languageComboBox = New-Object System.Windows.Forms.ComboBox
 $languageComboBox.Location = New-Object System.Drawing.Point(160, 110)
 $languageComboBox.Size = New-Object System.Drawing.Size(200, 20)
-$languageComboBox.Items.AddRange(@("Français (fr-FR)", "Anglais (en-US)", "Espagnol (es-ES)"))
+$languageComboBox.Items.AddRange(@(
+    "Français (fr-FR)", "Anglais (en-US)", "Espagnol (es-ES)", 
+    "Allemand (de-DE)", "Italien (it-IT)", "Japonais (ja-JP)", 
+    "Chinois simplifié (zh-CN)", "Russe (ru-RU)"
+))
 $languageComboBox.SelectedIndex = 0
+$languageComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($languageComboBox)
 
 $configLabel = New-Object System.Windows.Forms.Label
 $configLabel.Location = New-Object System.Drawing.Point(10, 140)
 $configLabel.Size = New-Object System.Drawing.Size(150, 20)
 $configLabel.Text = "Configuration :"
+$configLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($configLabel)
 
 $configComboBox = New-Object System.Windows.Forms.ComboBox
@@ -146,36 +163,42 @@ $configComboBox.Location = New-Object System.Drawing.Point(160, 140)
 $configComboBox.Size = New-Object System.Drawing.Size(200, 20)
 $configComboBox.Items.AddRange($configs.Name)
 $configComboBox.SelectedIndex = 0
+$configComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($configComboBox)
 
 $accountLabel = New-Object System.Windows.Forms.Label
 $accountLabel.Location = New-Object System.Drawing.Point(10, 170)
 $accountLabel.Size = New-Object System.Drawing.Size(150, 20)
 $accountLabel.Text = "Compte local :"
+$accountLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($accountLabel)
 
 $accountTextBox = New-Object System.Windows.Forms.TextBox
 $accountTextBox.Location = New-Object System.Drawing.Point(160, 170)
 $accountTextBox.Size = New-Object System.Drawing.Size(200, 20)
 $accountTextBox.Text = "Utilisateur"
+$accountTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($accountTextBox)
 
 $wallpaperLabel = New-Object System.Windows.Forms.Label
 $wallpaperLabel.Location = New-Object System.Drawing.Point(10, 200)
 $wallpaperLabel.Size = New-Object System.Drawing.Size(150, 20)
 $wallpaperLabel.Text = "Fond d'écran :"
+$wallpaperLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($wallpaperLabel)
 
 $wallpaperTextBox = New-Object System.Windows.Forms.TextBox
 $wallpaperTextBox.Location = New-Object System.Drawing.Point(160, 200)
 $wallpaperTextBox.Size = New-Object System.Drawing.Size(150, 20)
 $wallpaperTextBox.ReadOnly = $true
+$wallpaperTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($wallpaperTextBox)
 
 $wallpaperButton = New-Object System.Windows.Forms.Button
 $wallpaperButton.Location = New-Object System.Drawing.Point(320, 200)
 $wallpaperButton.Size = New-Object System.Drawing.Size(40, 20)
 $wallpaperButton.Text = "..."
+$wallpaperButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $wallpaperButton.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
     $openFileDialog.Filter = "Images (*.jpg;*.png)|*.jpg;*.png"
@@ -189,18 +212,21 @@ $appsLabel = New-Object System.Windows.Forms.Label
 $appsLabel.Location = New-Object System.Drawing.Point(10, 230)
 $appsLabel.Size = New-Object System.Drawing.Size(150, 20)
 $appsLabel.Text = "Applications :"
+$appsLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($appsLabel)
 
 $appsTextBox = New-Object System.Windows.Forms.TextBox
 $appsTextBox.Location = New-Object System.Drawing.Point(160, 230)
 $appsTextBox.Size = New-Object System.Drawing.Size(150, 20)
 $appsTextBox.ReadOnly = $true
+$appsTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($appsTextBox)
 
 $appsButton = New-Object System.Windows.Forms.Button
 $appsButton.Location = New-Object System.Drawing.Point(320, 230)
 $appsButton.Size = New-Object System.Drawing.Size(40, 20)
 $appsButton.Text = "..."
+$appsButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $appsButton.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
     $openFileDialog.Filter = "Installateurs (*.exe;*.msi)|*.exe;*.msi"
@@ -215,18 +241,21 @@ $driversLabel = New-Object System.Windows.Forms.Label
 $driversLabel.Location = New-Object System.Drawing.Point(10, 260)
 $driversLabel.Size = New-Object System.Drawing.Size(150, 20)
 $driversLabel.Text = "Pilotes :"
+$driversLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($driversLabel)
 
 $driversTextBox = New-Object System.Windows.Forms.TextBox
 $driversTextBox.Location = New-Object System.Drawing.Point(160, 260)
 $driversTextBox.Size = New-Object System.Drawing.Size(150, 20)
 $driversTextBox.ReadOnly = $true
+$driversTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($driversTextBox)
 
 $driversButton = New-Object System.Windows.Forms.Button
 $driversButton.Location = New-Object System.Drawing.Point(320, 260)
 $driversButton.Size = New-Object System.Drawing.Size(40, 20)
 $driversButton.Text = "..."
+$driversButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $driversButton.Add_Click({
     $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
     $openFileDialog.Filter = "Pilotes (*.inf)|*.inf"
@@ -241,6 +270,8 @@ $offlineCheckBox = New-Object System.Windows.Forms.CheckBox
 $offlineCheckBox.Location = New-Object System.Drawing.Point(10, 290)
 $offlineCheckBox.Size = New-Object System.Drawing.Size(150, 20)
 $offlineCheckBox.Text = "Mode hors ligne"
+$offlineCheckBox.Checked = $true # Mode hors ligne par défaut
+$offlineCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $offlineCheckBox.Add_CheckedChanged({
     if ($offlineCheckBox.Checked) {
         $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
@@ -259,12 +290,14 @@ $usbCheckBox = New-Object System.Windows.Forms.CheckBox
 $usbCheckBox.Location = New-Object System.Drawing.Point(160, 290)
 $usbCheckBox.Size = New-Object System.Drawing.Size(150, 20)
 $usbCheckBox.Text = "Créer clé USB"
+$usbCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($usbCheckBox)
 
 $advancedLabel = New-Object System.Windows.Forms.Label
 $advancedLabel.Location = New-Object System.Drawing.Point(10, 320)
 $advancedLabel.Size = New-Object System.Drawing.Size(150, 20)
 $advancedLabel.Text = "Options avancées :"
+$advancedLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($advancedLabel)
 
 $telemetryCheckBox = New-Object System.Windows.Forms.CheckBox
@@ -272,18 +305,21 @@ $telemetryCheckBox.Location = New-Object System.Drawing.Point(160, 320)
 $telemetryCheckBox.Size = New-Object System.Drawing.Size(200, 20)
 $telemetryCheckBox.Text = "Bloquer la télémétrie"
 $telemetryCheckBox.Checked = $true
+$telemetryCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($telemetryCheckBox)
 
 $defenderCheckBox = New-Object System.Windows.Forms.CheckBox
 $defenderCheckBox.Location = New-Object System.Drawing.Point(160, 350)
 $defenderCheckBox.Size = New-Object System.Drawing.Size(200, 20)
 $defenderCheckBox.Text = "Désactiver Defender"
+$defenderCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($defenderCheckBox)
 
 $edgeCheckBox = New-Object System.Windows.Forms.CheckBox
 $edgeCheckBox.Location = New-Object System.Drawing.Point(160, 380)
 $edgeCheckBox.Size = New-Object System.Drawing.Size(200, 20)
 $edgeCheckBox.Text = "Supprimer Edge"
+$edgeCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($edgeCheckBox)
 
 $onedriveCheckBox = New-Object System.Windows.Forms.CheckBox
@@ -291,12 +327,14 @@ $onedriveCheckBox.Location = New-Object System.Drawing.Point(160, 410)
 $onedriveCheckBox.Size = New-Object System.Drawing.Size(200, 20)
 $onedriveCheckBox.Text = "Supprimer OneDrive"
 $onedriveCheckBox.Checked = $true
+$onedriveCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($onedriveCheckBox)
 
 $profileLabel = New-Object System.Windows.Forms.Label
 $profileLabel.Location = New-Object System.Drawing.Point(10, 440)
 $profileLabel.Size = New-Object System.Drawing.Size(150, 20)
 $profileLabel.Text = "Profil :"
+$profileLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($profileLabel)
 
 $profileComboBox = New-Object System.Windows.Forms.ComboBox
@@ -304,12 +342,14 @@ $profileComboBox.Location = New-Object System.Drawing.Point(160, 440)
 $profileComboBox.Size = New-Object System.Drawing.Size(200, 20)
 $profileComboBox.Items.AddRange(@("Nouveau", "Charger existant"))
 $profileComboBox.SelectedIndex = 0
+$profileComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($profileComboBox)
 
 $profileButton = New-Object System.Windows.Forms.Button
 $profileButton.Location = New-Object System.Drawing.Point(370, 440)
 $profileButton.Size = New-Object System.Drawing.Size(100, 20)
 $profileButton.Text = "Enregistrer"
+$profileButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $profileButton.Add_Click({
     $profile = @{
         Version = $versionComboBox.SelectedItem
@@ -337,6 +377,7 @@ $okButton = New-Object System.Windows.Forms.Button
 $okButton.Location = New-Object System.Drawing.Point(10, 470)
 $okButton.Size = New-Object System.Drawing.Size(75, 23)
 $okButton.Text = "OK"
+$okButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $okButton.Add_Click({
     $script:version = $versionComboBox.SelectedItem
     $script:architecture = $architectureComboBox.SelectedItem
@@ -361,13 +402,18 @@ $cancelButton = New-Object System.Windows.Forms.Button
 $cancelButton.Location = New-Object System.Drawing.Point(90, 470)
 $cancelButton.Size = New-Object System.Drawing.Size(75, 23)
 $cancelButton.Text = "Annuler"
-$cancelButton.Add_Click({ $form.Close(); exit })
+$cancelButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$cancelButton.Add_Click({ 
+    Log-Message "Script annulé par l'utilisateur." -Step "Annulation"
+    $form.Close(); exit 
+})
 $form.Controls.Add($cancelButton)
 
 $helpButton = New-Object System.Windows.Forms.Button
 $helpButton.Location = New-Object System.Drawing.Point(170, 470)
 $helpButton.Size = New-Object System.Drawing.Size(75, 23)
 $helpButton.Text = "Aide"
+$helpButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $helpButton.Add_Click({
     $helpFile = "C:\Output\Help.html"
     $helpContent = @"
@@ -382,12 +428,13 @@ $helpButton.Add_Click({
         <li>Connexion Internet (sauf mode hors ligne)</li>
         <li>Windows ADK avec WinPE Add-ons (installé automatiquement)</li>
         <li>8 Go de RAM recommandé pour montage en mémoire (nécessite ImDisk : https://sourceforge.net/projects/imdisk-toolkit/)</li>
+        <li>Une ISO Windows 10/11 pour le mode hors ligne</li>
     </ul>
     <h2>Options</h2>
     <ul>
-        <li><b>Mode hors ligne</b> : Utilisez une ISO existante.</li>
+        <li><b>Mode hors ligne</b> : Sélectionnez une ISO existante (recommandé).</li>
         <li><b>Version/Release</b> : Choisissez Windows 10/11 et la version (ex. : 22H2).</li>
-        <li><b>Langue</b> : Sélectionnez la langue de l'OS.</li>
+        <li><b>Langue</b> : Sélectionnez la langue de l'OS (ex. : Français, Anglais, Allemand).</li>
         <li><b>Configuration</b> : Choisissez entre Ultra-léger, Léger, Gaming, ou Standard.</li>
         <li><b>Compte local</b> : Définissez un compte administrateur.</li>
         <li><b>Fond d'écran</b> : Ajoutez une image personnalisée (JPG/PNG).</li>
@@ -422,12 +469,17 @@ $mountPath = if ($ramDisk) { "Z:\Mount" } else { "C:\Mount" }
 $isoPath = if ($offline) { $isoPath } else { "C:\Temp\WinISO.iso" }
 $keepTempFiles = $false
 $languageName = switch ($language) {
-    "fr-FR" { "French" }
-    "en-US" { "English" }
-    "es-ES" { "Spanish" }
+    "Français (fr-FR)" { "French" }
+    "Anglais (en-US)" { "English" }
+    "Espagnol (es-ES)" { "Spanish" }
+    "Allemand (de-DE)" { "German" }
+    "Italien (it-IT)" { "Italian" }
+    "Japonais (ja-JP)" { "Japanese" }
+    "Chinois simplifié (zh-CN)" { "Chinese" }
+    "Russe (ru-RU)" { "Russian" }
     default { "English" }
 }
-$languageCode = $language
+$languageCode = $language -replace ".*\((.*)\)", '$1'
 $edition = if ($version -eq "Windows 10") { "Professional" } else { "Pro" }
 $oscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
 $configSize = ($configs | Where-Object { $_.Name -eq $config }).Size
@@ -445,7 +497,7 @@ if (-not (Test-Path $oscdimgPath)) {
     $adkUrl = "https://go.microsoft.com/fwlink/?linkid=2026036"
     $adkInstaller = "C:\Temp\adksetup.exe"
     Invoke-WebRequestWithRetry -Uri $adkUrl -OutFile $adkInstaller
-    Start-Process -FilePath $adkInstaller -ArgumentList "/quiet /features OptionId.DeploymentTools /norestart" -Wait
+    Start-Process -FilePath $adkInstaller -ArgumentList "/quiet /features OptionId.DeploymentTools OptionId.WindowsPreinstallationEnvironment /norestart" -Wait
     Log-Message "Windows ADK installé." -Step "Installation ADK"
 }
 
@@ -461,13 +513,9 @@ if ($ramDisk -and -not (Get-Command imdisk -ErrorAction SilentlyContinue)) {
 
 # Téléchargement de l'ISO si non hors ligne
 if (-not $offline) {
-    Log-Message "Téléchargement de l'ISO..." -Step "Téléchargement ISO"
-    Update-Progress -Percent 10
-    $isoUrl = "https://www.microsoft.com/fr-fr/software-download/windows$($version -replace 'Windows ', '')"
-    # Simulation du téléchargement (remplacez par une URL réelle si disponible)
-    $isoUrl = "https://example.com/windows.iso" # À remplacer par une source réelle
-    Invoke-WebRequestWithRetry -Uri $isoUrl -OutFile $isoPath
-    Log-Message "ISO téléchargé." -Step "Téléchargement ISO"
+    Log-Message "Téléchargement de l'ISO non disponible. Veuillez utiliser le mode hors ligne et sélectionner une ISO." -Step "Téléchargement ISO"
+    [System.Windows.Forms.MessageBox]::Show("Le téléchargement automatique de l'ISO n'est pas disponible. Veuillez cocher 'Mode hors ligne' et sélectionner une ISO Windows 10/11 téléchargée manuellement.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    exit
 }
 
 # Montage de l'ISO
