@@ -4,8 +4,8 @@ $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
 #requires -RunAsAdministrator
-# Script PowerShell pour télécharger et personnaliser une ISO Windows 10/11
-# Nécessite une connexion Internet et 20 Go d'espace libre sur C:
+# Script PowerShell pour personnaliser une ISO Windows 10/11
+# Nécessite un ISO existant et 20 Go d'espace libre sur C:
 
 # Test initial des accents pour confirmer l'encodage
 Write-Host "Test d'encodage UTF-8 : Jérôme Noël éèàç" -ForegroundColor Green
@@ -50,37 +50,43 @@ if ($drive.AvailableFreeSpace -lt 20GB) {
     exit 1
 }
 
-# Vérifier la connexion Internet et l'accès au serveur Microsoft
-Log-Message "Vérification de la connexion Internet et de l'accès au serveur Microsoft..." -Step "Vérification de la connexion"
-$useManualIso = $false
-Write-Host "Voulez-vous tenter le téléchargement automatique de l'ISO ou utiliser un ISO existant ?"
-Write-Host "1. Téléchargement automatique (peut échouer si Microsoft bloque votre connexion)"
-Write-Host "2. Utiliser un ISO existant (téléchargé manuellement)"
-$choice = Read-Host "Entrez 1 ou 2 [par défaut : 1]"
-if ($choice -eq "2") {
-    $useManualIso = $true
-} else {
-    try {
-        Test-Connection -ComputerName www.microsoft.com -Count 1 -ErrorAction Stop | Out-Null
-        $response = Invoke-WebRequest -Uri "https://www.microsoft.com/fr-fr/software-download/windows11" -Method Head -UseBasicParsing -ErrorAction Stop
-        if ($response.StatusCode -ne 200) {
-            throw "Échec de l'accès au serveur de téléchargement Microsoft."
-        }
-    } catch {
-        Write-Warning "Impossible de se connecter au serveur Microsoft. Causes possibles :"
-        Write-Warning "- VPN ou proxy actif."
-        Write-Warning "- Restrictions géographiques ou blocage temporaire de votre IP (erreur 715-123130)."
-        Write-Warning "- Problème de réseau local."
-        Write-Warning "Solutions :"
-        Write-Warning "- Désactivez tout VPN/proxy."
-        Write-Warning "- Essayez un autre réseau (ex. : point d'accès mobile)."
-        Write-Warning "- Utilisez un autre appareil pour télécharger l'ISO manuellement depuis :"
-        Write-Warning "  - Windows 10 : https://www.microsoft.com/fr-fr/software-download/windows10"
-        Write-Warning "  - Windows 11 : https://www.microsoft.com/fr-fr/software-download/windows11"
-        Write-Warning "Si le problème persiste, contactez le support Microsoft : https://support.microsoft.com/fr-fr/contactus (mentionnez l'erreur 715-123130 et l'ID ef64b89d-bbf8-402c-b6be-54d770c30ffe)."
-        $useManualIso = $true
+# Demander un ISO existant
+Log-Message "Veuillez fournir un ISO Windows existant..." -Step "Validation de l'ISO"
+Write-Warning "Votre adresse IP semble bloquée par les serveurs Microsoft (erreur 715-123130)."
+Write-Warning "Téléchargez l'ISO manuellement depuis un autre appareil ou réseau :"
+Write-Warning "- Windows 10 : https://www.microsoft.com/fr-fr/software-download/windows10"
+Write-Warning "- Windows 11 : https://www.microsoft.com/fr-fr/software-download/windows11"
+Write-Warning "Solutions pour contourner le blocage :"
+Write-Warning "- Désactivez tout VPN/proxy."
+Write-Warning "- Utilisez un autre réseau (ex. : point d'accès mobile)."
+Write-Warning "- Attendez 24-48 heures pour un déblocage automatique."
+Write-Warning "- Contactez le support Microsoft : https://support.microsoft.com/fr-fr/contactus (erreur 715-123130, ID ef64b89d-bbf8-402c-b6be-54d770c30ffe)."
+while ($true) {
+    $isoPath = Read-Host "Entrez le chemin de l'ISO téléchargée (ex. : C:\ISO\Win11.iso, tapez 'quitter' pour arrêter)"
+    if ($isoPath -eq "quitter") {
+        Write-Host "Opération annulée par l'utilisateur."
+        exit 0
+    }
+    if (Test-Path $isoPath -and $isoPath -match "\.iso$") {
+        Log-Message "Chemin de l'ISO valide : $isoPath"
+        break
+    } else {
+        Write-Warning "Chemin de l'ISO invalide (doit être un fichier .iso existant). Réessayez ou tapez 'quitter'."
     }
 }
+
+# Vérification de l'ISO
+Update-Progress -Percent 5
+if ((Get-Item $isoPath).Length -lt 1MB) {
+    Write-Error "Fichier ISO invalide (taille trop petite)."
+    exit 1
+}
+$hash = Get-FileHash -Path $isoPath -Algorithm SHA256
+if ($hash.Hash.Length -ne 64) {
+    Write-Error "ISO corrompue ou invalide."
+    exit 1
+}
+Update-Progress -Percent 10
 
 # Installer Windows ADK (Deployment Tools) si nécessaire
 Log-Message "Vérification de Windows ADK..." -Step "Installation de Windows ADK"
@@ -105,7 +111,7 @@ if (-not (Test-Path $oscdimgPath)) {
 }
 
 # Avertissement légal
-Write-Warning "Avertissement : Ce script télécharge une ISO officielle depuis Microsoft. Assurez-vous d'avoir une licence valide pour l'édition choisie."
+Write-Warning "Avertissement : Assurez-vous d'avoir une licence valide pour l'édition de Windows utilisée."
 $confirm = Read-Host "Tapez 'oui' pour continuer"
 if ($confirm -ne "oui") {
     Write-Host "Opération annulée."
@@ -115,78 +121,18 @@ if ($confirm -ne "oui") {
 # Choix de la version de Windows avec Out-GridView
 Log-Message "Choix de la version de Windows..." -Step "Configuration"
 $versions = @(
-    [PSCustomObject]@{ Name = "Windows 10 Home"; OS = "Windows 10"; Edition = "Home"; FidoVersion = "10"; FidoEdition = "Home" }
-    [PSCustomObject]@{ Name = "Windows 10 Pro"; OS = "Windows 10"; Edition = "Pro"; FidoVersion = "10"; FidoEdition = "Pro" }
-    [PSCustomObject]@{ Name = "Windows 10 Education"; OS = "Windows 10"; Edition = "Education"; FidoVersion = "10"; FidoEdition = "Education" }
-    [PSCustomObject]@{ Name = "Windows 11 Home"; OS = "Windows 11"; Edition = "Home"; FidoVersion = "11"; FidoEdition = "Home" }
-    [PSCustomObject]@{ Name = "Windows 11 Pro"; OS = "Windows 11"; Edition = "Pro"; FidoVersion = "11"; FidoEdition = "Pro" }
-    [PSCustomObject]@{ Name = "Windows 11 Education"; OS = "Windows 11"; Edition = "Education"; FidoVersion = "11"; FidoEdition = "Education" }
+    [PSCustomObject]@{ Name = "Windows 10 Home"; OS = "Windows 10"; Edition = "Home" }
+    [PSCustomObject]@{ Name = "Windows 10 Pro"; OS = "Windows 10"; Edition = "Pro" }
+    [PSCustomObject]@{ Name = "Windows 10 Education"; OS = "Windows 10"; Edition = "Education" }
+    [PSCustomObject]@{ Name = "Windows 11 Home"; OS = "Windows 11"; Edition = "Home" }
+    [PSCustomObject]@{ Name = "Windows 11 Pro"; OS = "Windows 11"; Edition = "Pro" }
+    [PSCustomObject]@{ Name = "Windows 11 Education"; OS = "Windows 11"; Edition = "Education" }
 )
 $versionInfo = $versions | Out-GridView -Title "Choisissez une version de Windows" -OutputMode Single
 if (-not $versionInfo) {
     Write-Error "Aucune version sélectionnée."
     exit 1
 }
-
-# Téléchargement de l'ISO avec Fido ou manuellement
-Log-Message "Téléchargement de l'ISO $($versionInfo.OS) $($versionInfo.Edition)..." -Step "Téléchargement de l'ISO"
-Update-Progress -Percent 5
-$isoPath = "C:\Output\$($versionInfo.OS)_$($versionInfo.Edition).iso"
-if (-not $useManualIso) {
-    $fidoUrl = "https://raw.githubusercontent.com/pbatard/Fido/master/Fido.ps1"
-    $fidoPath = "C:\Temp\Fido.ps1"
-    New-Item -ItemType Directory -Path "C:\Temp" -Force | Out-Null
-    try {
-        Invoke-WebRequest -Uri $fidoUrl -OutFile $fidoPath -ErrorAction Stop
-        . $fidoPath
-        $downloadUrl = Get-WindowsIsoUrl -Version $versionInfo.FidoVersion -Edition $versionInfo.FidoEdition -Language "French" -Architecture "x64"
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $isoPath -ErrorAction Stop
-    } catch {
-        Log-Message "Échec du téléchargement automatique de l'ISO via Fido : $($_.Exception.Message)"
-        $useManualIso = $true
-    }
-}
-
-# Entrée manuelle du chemin de l'ISO avec boucle non bloquante
-if ($useManualIso) {
-    Write-Warning "Échec du téléchargement ou téléchargement manuel choisi."
-    Write-Warning "Causes possibles du blocage Microsoft (erreur 715-123130) :"
-    Write-Warning "- VPN ou proxy actif."
-    Write-Warning "- Restrictions géographiques ou blocage temporaire de votre IP."
-    Write-Warning "- Problème de réseau local."
-    Write-Warning "Solutions :"
-    Write-Warning "- Désactivez tout VPN/proxy."
-    Write-Warning "- Essayez un autre réseau (ex. : point d'accès mobile)."
-    Write-Warning "- Téléchargez l'ISO manuellement depuis un autre appareil :"
-    Write-Warning "  - Windows 10 : https://www.microsoft.com/fr-fr/software-download/windows10"
-    Write-Warning "  - Windows 11 : https://www.microsoft.com/fr-fr/software-download/windows11"
-    Write-Warning "- Contactez le support Microsoft : https://support.microsoft.com/fr-fr/contactus (erreur 715-123130, ID ef64b89d-bbf8-402c-b6be-54d770c30ffe)."
-    while ($true) {
-        $isoPath = Read-Host "Entrez le chemin de l'ISO téléchargée (ex. : C:\ISO\Win11.iso, tapez 'quitter' pour arrêter)"
-        if ($isoPath -eq "quitter") {
-            Write-Host "Opération annulée par l'utilisateur."
-            exit 0
-        }
-        if (Test-Path $isoPath -and $isoPath -match "\.iso$") {
-            Log-Message "Chemin de l'ISO valide : $isoPath"
-            break
-        } else {
-            Write-Warning "Chemin de l'ISO invalide (doit être un fichier .iso existant). Réessayez ou tapez 'quitter'."
-        }
-    }
-}
-
-# Vérification de l'ISO
-if (-not (Test-Path $isoPath) -or (Get-Item $isoPath).Length -lt 1MB) {
-    Write-Error "Échec du téléchargement ou fichier ISO invalide."
-    exit 1
-}
-$hash = Get-FileHash -Path $isoPath -Algorithm SHA256
-if ($hash.Hash.Length -ne 64) {
-    Write-Error "ISO corrompue ou invalide."
-    exit 1
-}
-Update-Progress -Percent 10
 
 # Téléchargement des mises à jour
 Log-Message "Téléchargement des mises à jour..." -Step "Téléchargement des mises à jour"
@@ -544,7 +490,7 @@ if ($createBootableUsb) {
 # Nettoyage
 Log-Message "Nettoyage..." -Step "Nettoyage"
 Update-Progress -Percent 95
-Remove-Item -Path $tempDir, $mountPath, $updatesPath, $fidoPath -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $tempDir, $mountPath, $updatesPath -Recurse -Force -ErrorAction SilentlyContinue
 Dismount-DiskImage -ImagePath $isoPath -ErrorAction SilentlyContinue
 
 # Finalisation
