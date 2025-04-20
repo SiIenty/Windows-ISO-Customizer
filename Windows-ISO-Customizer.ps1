@@ -1,7 +1,7 @@
-# Définir l'encodage UTF-8 immédiatement pour gérer les accents
+# Définir l'encodage UTF-8 globalement pour PowerShell dès le début
+$PSDefaultParameterValues['*:Encoding'] = 'utf8'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
-chcp 65001 | Out-Null
 
 #requires -RunAsAdministrator
 # Script PowerShell pour télécharger et personnaliser une ISO Windows 10/11
@@ -44,13 +44,26 @@ if ($drive.AvailableFreeSpace -lt 20GB) {
     exit 1
 }
 
-# Vérifier la connexion Internet
-Log-Message "Vérification de la connexion Internet..." -Step "Vérification de la connexion"
+# Vérifier la connexion Internet et l'accès au serveur Microsoft
+Log-Message "Vérification de la connexion Internet et de l'accès au serveur Microsoft..." -Step "Vérification de la connexion"
 try {
     Test-Connection -ComputerName www.microsoft.com -Count 1 -ErrorAction Stop | Out-Null
+    $response = Invoke-WebRequest -Uri "https://www.microsoft.com/fr-fr/software-download/windows11" -Method Head -UseBasicParsing -ErrorAction Stop
+    if ($response.StatusCode -ne 200) {
+        throw "Échec de l'accès au serveur de téléchargement Microsoft."
+    }
 } catch {
-    Write-Error "Connexion Internet requise pour télécharger l'ISO et les mises à jour. Vérifiez votre connexion ou désactivez tout VPN/proxy."
-    exit 1
+    Write-Warning "Impossible de se connecter au serveur Microsoft. Causes possibles :"
+    Write-Warning "- VPN ou proxy actif."
+    Write-Warning "- Restrictions géographiques ou blocage temporaire de votre IP (erreur 715-123130)."
+    Write-Warning "- Problème de réseau local."
+    Write-Warning "Solutions :"
+    Write-Warning "- Désactivez tout VPN/proxy."
+    Write-Warning "- Essayez un autre réseau (ex. : point d'accès mobile)."
+    Write-Warning "- Utilisez un autre appareil pour télécharger l'ISO manuellement depuis :"
+    Write-Warning "  - Windows 10 : https://www.microsoft.com/fr-fr/software-download/windows10"
+    Write-Warning "  - Windows 11 : https://www.microsoft.com/fr-fr/software-download/windows11"
+    Write-Warning "Si le problème persiste, contactez le support Microsoft : https://support.microsoft.com/fr-fr/contactus (mentionnez l'erreur 715-123130 et l'ID ef64b89d-bbf8-402c-b6be-54d770c30ffe)."
 }
 
 # Installer Windows ADK (Deployment Tools) si nécessaire
@@ -118,6 +131,7 @@ try {
     Write-Warning "- Windows 10 : https://www.microsoft.com/fr-fr/software-download/windows10"
     Write-Warning "- Windows 11 : https://www.microsoft.com/fr-fr/software-download/windows11"
     Write-Warning "Si vous utilisez un VPN, désactivez-le et réessayez."
+    Write-Warning "Si le site Microsoft est bloqué, essayez un autre réseau ou appareil, ou contactez le support Microsoft : https://support.microsoft.com/fr-fr/contactus (erreur 715-123130, ID ef64b89d-bbf8-402c-b6be-54d770c30ffe)."
     $isoPath = Read-Host "Entrez le chemin de l'ISO téléchargée (ex. : C:\ISO\Win11.iso)"
     if (-not (Test-Path $isoPath) -or $isoPath -notmatch "\.iso$") {
         Write-Error "Chemin de l'ISO invalide."
@@ -186,11 +200,21 @@ if ($passwordPlain -and $passwordPlain.Length -lt 8) {
 $language = Read-Host "Langue de l'OS (ex. : fr-FR, en-US, es-ES, de-DE) [par défaut : fr-FR]"
 if (-not $language) { $language = "fr-FR" }
 
-# Fond d'écran personnalisé
-$wallpaperPath = Read-Host "Chemin du fond d'écran (JPG/PNG, optionnel)"
-if ($wallpaperPath -and -not (Test-Path $wallpaperPath) -or $wallpaperPath -notmatch "\.(jpg|png)$") {
-    Write-Error "Chemin du fond d'écran invalide."
-    exit 1
+# Fond d'écran personnalisé avec gestion des erreurs non bloquante
+$wallpaperPath = $null
+while ($true) {
+    $inputPath = Read-Host "Chemin du fond d'écran (JPG/PNG, optionnel, tapez 'skip' pour ignorer)"
+    if ($inputPath -eq "skip" -or [string]::IsNullOrWhiteSpace($inputPath)) {
+        Log-Message "Aucun fond d'écran personnalisé sélectionné. Utilisation du fond par défaut."
+        break
+    }
+    if (Test-Path $inputPath -and $inputPath -match "\.(jpg|png)$") {
+        $wallpaperPath = $inputPath
+        Log-Message "Fond d'écran valide : $wallpaperPath"
+        break
+    } else {
+        Write-Warning "Chemin du fond d'écran invalide (doit être un fichier JPG/PNG existant). Réessayez ou tapez 'skip'."
+    }
 }
 
 # Applications tierces
@@ -268,7 +292,18 @@ Update-Progress -Percent 40
 $setupPath = "$tempDir\sources\appraiserres.dll"
 if (Test-Path $setupPath) {
     Move-Item $setupPath "$setupPath.bak" -Force
-    Log-Message "Restrictions désactivées."
+    Log-Message "Restrictions TPM/Secure Boot désactivées."
+}
+# Ajout d'une clé de registre pour Windows 11 pour contourner TPM/Secure Boot
+if ($versionInfo.OS -eq "Windows 11") {
+    New-Item -Path "$tempDir\sources\`$OEM$\$$\Setup\Scripts" -ItemType Directory -Force | Out-Null
+    $bypassScript = @"
+reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f
+reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f
+reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f
+reg add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f
+"@
+    $bypassScript | Out-File -FilePath "$tempDir\sources\`$OEM$\$$\Setup\Scripts\SetupComplete.cmd" -Encoding ascii
 }
 
 # Suppression des bloatwares
@@ -447,6 +482,16 @@ $hash = Get-FileHash -Path $isoOutput -Algorithm SHA256
 $isoSize = (Get-Item $isoOutput).Length / 1GB
 Log-Message "Taille de l'ISO : ~$isoSize Go"
 if ($hash.Hash.Length -ne 64) { Write-Error "ISO corrompue."; exit 1 }
+
+# Test de montage de l'ISO pour vérifier son intégrité
+Log-Message "Test de montage de l'ISO..." -Step "Vérification de l'ISO"
+try {
+    Mount-DiskImage -ImagePath $isoOutput -ErrorAction Stop
+    Dismount-DiskImage -ImagePath $isoOutput -ErrorAction Stop
+} catch {
+    Write-Error "L'ISO générée semble corrompue ou non bootable. Vérifiez les modifications appliquées."
+    exit 1
+}
 
 # Création de la clé USB bootable
 if ($createBootableUsb) {
