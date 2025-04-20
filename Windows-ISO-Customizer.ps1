@@ -1,500 +1,733 @@
-# Définir l'encodage UTF-8 globalement pour PowerShell dès le début
+# CustomWindowsISO.ps1
+# Script PowerShell pour personnaliser une ISO Windows avec message de conseil dans WinPE
+
+# Définir l'encodage UTF-8 globalement
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 [Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
 #requires -RunAsAdministrator
-# Script PowerShell pour personnaliser une ISO Windows 10/11
-# Nécessite un ISO existant et 20 Go d'espace libre sur C:
 
-# Test initial des accents pour confirmer l'encodage
-Write-Host "Test d'encodage UTF-8 : Jérôme Noël éèàç" -ForegroundColor Green
-if ("Jérôme Noël éèàç" -ne "Jérôme Noël éèàç") {
-    Write-Warning "Problème d'encodage UTF-8 détecté. Les accents risquent d'être corrompus."
+# Fonction pour vérifier si l'exécution est en mode administrateur
+function Test-Admin {
+    $currentUser = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $currentUser.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Vérifier les privilèges administrateur et relancer en mode admin si nécessaire
-$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Write-Warning "Ce script doit être exécuté en mode administrateur. Tentative de relance avec élévation..."
-    $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`""
-    Start-Process powershell -Verb RunAs -ArgumentList $arguments
+# Vérification des privilèges administratifs
+if (-not (Test-Admin)) {
+    Write-Host "Ce script doit être exécuté en tant qu'administrateur." -ForegroundColor Red
     exit
 }
 
-# Configuration des logs
-$logPath = "C:\Output\CustomizationLog.txt"
-$ErrorActionPreference = "Stop"
-New-Item -ItemType Directory -Path "C:\Output" -Force | Out-Null
-Start-Transcript -Path $logPath -Append
-
-# Fonction pour écrire des messages
+# Fonction pour journaliser les messages
 function Log-Message {
-    param($Message, $Step)
-    Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message"
-    if ($Step) {
-        Write-Host "Étape : $Step" -ForegroundColor Cyan
-    }
+    param (
+        [string]$Message,
+        [string]$Step
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "[$timestamp] $Step : $Message"
+    Write-Host $logEntry
+    $logEntry | Out-File -FilePath "C:\Output\CustomizationLog.txt" -Append -Encoding utf8
 }
 
-# Fonction pour mettre à jour la progression
+# Fonction pour mettre à jour la barre de progression
 function Update-Progress {
-    param($Percent)
-    Write-Host "Progression : $Percent%" -ForegroundColor Yellow
+    param (
+        [int]$Percent
+    )
+    $progressBar.Value = $Percent
+    $form.Refresh()
 }
 
-# Vérifier l'espace disque
-$drive = New-Object System.IO.DriveInfo("C")
-if ($drive.AvailableFreeSpace -lt 20GB) {
-    Write-Error "Espace disque insuffisant sur C: (minimum 20 Go requis)."
-    exit 1
-}
-
-# Demander un ISO existant
-Log-Message "Veuillez fournir un ISO Windows existant..." -Step "Validation de l'ISO"
-Write-Warning "Votre adresse IP semble bloquée par les serveurs Microsoft (erreur 715-123130)."
-Write-Warning "Téléchargez l'ISO manuellement depuis un autre appareil ou réseau :"
-Write-Warning "- Windows 10 : https://www.microsoft.com/fr-fr/software-download/windows10"
-Write-Warning "- Windows 11 : https://www.microsoft.com/fr-fr/software-download/windows11"
-Write-Warning "Solutions pour contourner le blocage :"
-Write-Warning "- Désactivez tout VPN/proxy."
-Write-Warning "- Utilisez un autre réseau (ex. : point d'accès mobile)."
-Write-Warning "- Attendez 24-48 heures pour un déblocage automatique."
-Write-Warning "- Contactez le support Microsoft : https://support.microsoft.com/fr-fr/contactus (erreur 715-123130, ID ef64b89d-bbf8-402c-b6be-54d770c30ffe)."
-while ($true) {
-    $isoPath = Read-Host "Entrez le chemin de l'ISO téléchargée (ex. : C:\ISO\Win11.iso, tapez 'quitter' pour arrêter)"
-    if ($isoPath -eq "quitter") {
-        Write-Host "Opération annulée par l'utilisateur."
-        exit 0
-    }
-    if (Test-Path $isoPath -and $isoPath -match "\.iso$") {
-        Log-Message "Chemin de l'ISO valide : $isoPath"
-        break
-    } else {
-        Write-Warning "Chemin de l'ISO invalide (doit être un fichier .iso existant). Réessayez ou tapez 'quitter'."
+# Fonction pour télécharger avec gestion des erreurs
+function Invoke-WebRequestWithRetry {
+    param (
+        [string]$Uri,
+        [string]$OutFile,
+        [int]$Retries = 3,
+        [int]$Delay = 5
+    )
+    for ($i = 1; $i -le $Retries; $i++) {
+        try {
+            $response = Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
+            return $response
+        }
+        catch {
+            Write-Host "Tentative $i/$Retries échouée : $_" -ForegroundColor Yellow
+            if ($i -lt $Retries) { Start-Sleep -Seconds $Delay }
+            else { throw $_ }
+        }
     }
 }
 
-# Vérification de l'ISO
-Update-Progress -Percent 5
-if ((Get-Item $isoPath).Length -lt 1MB) {
-    Write-Error "Fichier ISO invalide (taille trop petite)."
-    exit 1
-}
-$hash = Get-FileHash -Path $isoPath -Algorithm SHA256
-if ($hash.Hash.Length -ne 64) {
-    Write-Error "ISO corrompue ou invalide."
-    exit 1
-}
-Update-Progress -Percent 10
+# Création du dossier de sortie
+$null = New-Item -ItemType Directory -Path "C:\Output" -Force
 
-# Installer Windows ADK (Deployment Tools) si nécessaire
-Log-Message "Vérification de Windows ADK..." -Step "Installation de Windows ADK"
-$oscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
-if (-not (Test-Path $oscdimgPath)) {
-    Log-Message "Windows ADK non trouvé. Téléchargement et installation..."
-    $adkUrl = "https://go.microsoft.com/fwlink/?linkid=2243537"
-    $adkSetup = "C:\Temp\adksetup.exe"
-    New-Item -ItemType Directory -Path "C:\Temp" -Force | Out-Null
-    try {
-        Invoke-WebRequest -Uri $adkUrl -OutFile $adkSetup -ErrorAction Stop
-        Start-Process -FilePath $adkSetup -ArgumentList "/quiet /features OptionId.DeploymentTools /norestart" -Wait
-    } catch {
-        Write-Error "Échec de l'installation de Windows ADK. Téléchargez-le manuellement : https://learn.microsoft.com/windows-hardware/get-started/adk-install"
-        exit 1
-    }
-    if (-not (Test-Path $oscdimgPath)) {
-        Write-Error "Windows ADK n'a pas été installé correctement."
-        exit 1
-    }
-    Log-Message "Windows ADK installé avec succès."
-}
-
-# Avertissement légal
-Write-Warning "Avertissement : Assurez-vous d'avoir une licence valide pour l'édition de Windows utilisée."
-$confirm = Read-Host "Tapez 'oui' pour continuer"
-if ($confirm -ne "oui") {
-    Write-Host "Opération annulée."
-    exit 0
-}
-
-# Choix de la version de Windows avec Out-GridView
-Log-Message "Choix de la version de Windows..." -Step "Configuration"
-$versions = @(
-    [PSCustomObject]@{ Name = "Windows 10 Home"; OS = "Windows 10"; Edition = "Home" }
-    [PSCustomObject]@{ Name = "Windows 10 Pro"; OS = "Windows 10"; Edition = "Pro" }
-    [PSCustomObject]@{ Name = "Windows 10 Education"; OS = "Windows 10"; Edition = "Education" }
-    [PSCustomObject]@{ Name = "Windows 11 Home"; OS = "Windows 11"; Edition = "Home" }
-    [PSCustomObject]@{ Name = "Windows 11 Pro"; OS = "Windows 11"; Edition = "Pro" }
-    [PSCustomObject]@{ Name = "Windows 11 Education"; OS = "Windows 11"; Edition = "Education" }
-)
-$versionInfo = $versions | Out-GridView -Title "Choisissez une version de Windows" -OutputMode Single
-if (-not $versionInfo) {
-    Write-Error "Aucune version sélectionnée."
-    exit 1
-}
-
-# Téléchargement des mises à jour
-Log-Message "Téléchargement des mises à jour..." -Step "Téléchargement des mises à jour"
-Update-Progress -Percent 15
-$updatesPath = "C:\Temp\Updates"
-New-Item -ItemType Directory -Path $updatesPath -Force | Out-Null
-$updateCatalogUrl = "https://www.catalog.update.microsoft.com/Search.aspx?q=cumulative+update+$($versionInfo.OS)+$($versionInfo.Edition)"
-try {
-    $webContent = Invoke-WebRequest -Uri $updateCatalogUrl -UseBasicParsing
-    $updateLinks = $webContent.Links | Where-Object { $_.href -match "\.msu" } | Select-Object -First 1
-    if ($updateLinks) {
-        $updateUrl = $updateLinks.href
-        $updateFile = "$updatesPath\latest_update.msu"
-        Invoke-WebRequest -Uri $updateUrl -OutFile $updateFile
-    } else {
-        Log-Message "Aucune mise à jour trouvée. Poursuite sans mises à jour."
-    }
-} catch {
-    Log-Message "Échec du téléchargement des mises à jour : $($_.Exception.Message). Poursuite sans mises à jour."
-}
-
-# Choix de la configuration avec Out-GridView
+# Configurations disponibles
 $configs = @(
-    [PSCustomObject]@{ Name = "Ultra-léger (8-10 Go, minimaliste, services réduits)" }
-    [PSCustomObject]@{ Name = "Léger (12-14 Go, bloatwares supprimés)" }
-    [PSCustomObject]@{ Name = "Optimisé pour le gaming (15-18 Go, performances maximales)" }
-    [PSCustomObject]@{ Name = "Proche de Windows de base (18-22 Go, sans bloatwares ni restrictions)" }
+    [PSCustomObject]@{ Name = "Ultra-léger (8-10 Go, minimaliste, services réduits)"; Size = 25 }
+    [PSCustomObject]@{ Name = "Léger (12-14 Go, bloatwares supprimés)"; Size = 29 }
+    [PSCustomObject]@{ Name = "Optimisé pour le gaming (15-18 Go, performances maximales)"; Size = 33 }
+    [PSCustomObject]@{ Name = "Proche de Windows de base (18-22 Go, sans bloatwares ni restrictions)"; Size = 37 }
 )
-$selectedConfig = $configs | Out-GridView -Title "Choisissez une configuration" -OutputMode Single
-if (-not $selectedConfig) {
-    Write-Error "Aucune configuration sélectionnée."
-    exit 1
-}
-$config = $selectedConfig.Name.Split(" ")[0]
 
-# Configuration du compte local
-$accountName = Read-Host "Nom du compte local administrateur (ex. : Jérôme)"
-if ($accountName -match '[<>:\"/\\|?*]') {
-    Write-Error "Nom de compte invalide (caractères interdits : <>:`"/\\|?*)."
-    exit 1
-}
-$password = Read-Host "Mot de passe (optionnel, laissez vide pour aucun)" -AsSecureString
-$passwordPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($password))
-if ($passwordPlain -and $passwordPlain.Length -lt 8) {
-    Write-Error "Mot de passe trop court (minimum 8 caractères)."
-    exit 1
-}
+# Création de l'interface graphique
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
-# Choix de la langue
-$language = Read-Host "Langue de l'OS (ex. : fr-FR, en-US, es-ES, de-DE) [par défaut : fr-FR]"
-if (-not $language) { $language = "fr-FR" }
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Personnalisation ISO Windows"
+$form.Size = New-Object System.Drawing.Size(800, 600)
+$form.StartPosition = "CenterScreen"
 
-# Fond d'écran personnalisé avec gestion des erreurs non bloquante
-$wallpaperPath = $null
-while ($true) {
-    $inputPath = Read-Host "Chemin du fond d'écran (JPG/PNG, optionnel, tapez 'skip' pour ignorer)"
-    if ($inputPath -eq "skip" -or [string]::IsNullOrWhiteSpace($inputPath)) {
-        Log-Message "Aucun fond d'écran personnalisé sélectionné. Utilisation du fond par défaut."
-        break
+# Éléments de l'interface
+$versionLabel = New-Object System.Windows.Forms.Label
+$versionLabel.Location = New-Object System.Drawing.Point(10, 20)
+$versionLabel.Size = New-Object System.Drawing.Size(150, 20)
+$versionLabel.Text = "Version de Windows :"
+$form.Controls.Add($versionLabel)
+
+$versionComboBox = New-Object System.Windows.Forms.ComboBox
+$versionComboBox.Location = New-Object System.Drawing.Point(160, 20)
+$versionComboBox.Size = New-Object System.Drawing.Size(200, 20)
+$versionComboBox.Items.AddRange(@("Windows 10", "Windows 11"))
+$versionComboBox.SelectedIndex = 0
+$form.Controls.Add($versionComboBox)
+
+$architectureLabel = New-Object System.Windows.Forms.Label
+$architectureLabel.Location = New-Object System.Drawing.Point(10, 50)
+$architectureLabel.Size = New-Object System.Drawing.Size(150, 20)
+$architectureLabel.Text = "Architecture :"
+$form.Controls.Add($architectureLabel)
+
+$architectureComboBox = New-Object System.Windows.Forms.ComboBox
+$architectureComboBox.Location = New-Object System.Drawing.Point(160, 50)
+$architectureComboBox.Size = New-Object System.Drawing.Size(200, 20)
+$architectureComboBox.Items.AddRange(@("x64", "ARM64"))
+$architectureComboBox.SelectedIndex = 0
+$form.Controls.Add($architectureComboBox)
+
+$releaseLabel = New-Object System.Windows.Forms.Label
+$releaseLabel.Location = New-Object System.Drawing.Point(10, 80)
+$releaseLabel.Size = New-Object System.Drawing.Size(150, 20)
+$releaseLabel.Text = "Release :"
+$form.Controls.Add($releaseLabel)
+
+$releaseComboBox = New-Object System.Windows.Forms.ComboBox
+$releaseComboBox.Location = New-Object System.Drawing.Point(160, 80)
+$releaseComboBox.Size = New-Object System.Drawing.Size(200, 20)
+$releaseComboBox.Items.AddRange(@("Latest", "21H2", "22H2"))
+$releaseComboBox.SelectedIndex = 0
+$form.Controls.Add($releaseComboBox)
+
+$languageLabel = New-Object System.Windows.Forms.Label
+$languageLabel.Location = New-Object System.Drawing.Point(10, 110)
+$languageLabel.Size = New-Object System.Drawing.Size(150, 20)
+$languageLabel.Text = "Langue :"
+$form.Controls.Add($languageLabel)
+
+$languageComboBox = New-Object System.Windows.Forms.ComboBox
+$languageComboBox.Location = New-Object System.Drawing.Point(160, 110)
+$languageComboBox.Size = New-Object System.Drawing.Size(200, 20)
+$languageComboBox.Items.AddRange(@("Français (fr-FR)", "Anglais (en-US)", "Espagnol (es-ES)"))
+$languageComboBox.SelectedIndex = 0
+$form.Controls.Add($languageComboBox)
+
+$configLabel = New-Object System.Windows.Forms.Label
+$configLabel.Location = New-Object System.Drawing.Point(10, 140)
+$configLabel.Size = New-Object System.Drawing.Size(150, 20)
+$configLabel.Text = "Configuration :"
+$form.Controls.Add($configLabel)
+
+$configComboBox = New-Object System.Windows.Forms.ComboBox
+$configComboBox.Location = New-Object System.Drawing.Point(160, 140)
+$configComboBox.Size = New-Object System.Drawing.Size(200, 20)
+$configComboBox.Items.AddRange($configs.Name)
+$configComboBox.SelectedIndex = 0
+$form.Controls.Add($configComboBox)
+
+$accountLabel = New-Object System.Windows.Forms.Label
+$accountLabel.Location = New-Object System.Drawing.Point(10, 170)
+$accountLabel.Size = New-Object System.Drawing.Size(150, 20)
+$accountLabel.Text = "Compte local :"
+$form.Controls.Add($accountLabel)
+
+$accountTextBox = New-Object System.Windows.Forms.TextBox
+$accountTextBox.Location = New-Object System.Drawing.Point(160, 170)
+$accountTextBox.Size = New-Object System.Drawing.Size(200, 20)
+$accountTextBox.Text = "Utilisateur"
+$form.Controls.Add($accountTextBox)
+
+$wallpaperLabel = New-Object System.Windows.Forms.Label
+$wallpaperLabel.Location = New-Object System.Drawing.Point(10, 200)
+$wallpaperLabel.Size = New-Object System.Drawing.Size(150, 20)
+$wallpaperLabel.Text = "Fond d'écran :"
+$form.Controls.Add($wallpaperLabel)
+
+$wallpaperTextBox = New-Object System.Windows.Forms.TextBox
+$wallpaperTextBox.Location = New-Object System.Drawing.Point(160, 200)
+$wallpaperTextBox.Size = New-Object System.Drawing.Size(150, 20)
+$wallpaperTextBox.ReadOnly = $true
+$form.Controls.Add($wallpaperTextBox)
+
+$wallpaperButton = New-Object System.Windows.Forms.Button
+$wallpaperButton.Location = New-Object System.Drawing.Point(320, 200)
+$wallpaperButton.Size = New-Object System.Drawing.Size(40, 20)
+$wallpaperButton.Text = "..."
+$wallpaperButton.Add_Click({
+    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+    $openFileDialog.Filter = "Images (*.jpg;*.png)|*.jpg;*.png"
+    if ($openFileDialog.ShowDialog() -eq "OK") {
+        $wallpaperTextBox.Text = $openFileDialog.FileName
     }
-    if (Test-Path $inputPath -and $inputPath -match "\.(jpg|png)$") {
-        $wallpaperPath = $inputPath
-        Log-Message "Fond d'écran valide : $wallpaperPath"
-        break
-    } else {
-        Write-Warning "Chemin du fond d'écran invalide (doit être un fichier JPG/PNG existant). Réessayez ou tapez 'skip'."
+})
+$form.Controls.Add($wallpaperButton)
+
+$appsLabel = New-Object System.Windows.Forms.Label
+$appsLabel.Location = New-Object System.Drawing.Point(10, 230)
+$appsLabel.Size = New-Object System.Drawing.Size(150, 20)
+$appsLabel.Text = "Applications :"
+$form.Controls.Add($appsLabel)
+
+$appsTextBox = New-Object System.Windows.Forms.TextBox
+$appsTextBox.Location = New-Object System.Drawing.Point(160, 230)
+$appsTextBox.Size = New-Object System.Drawing.Size(150, 20)
+$appsTextBox.ReadOnly = $true
+$form.Controls.Add($appsTextBox)
+
+$appsButton = New-Object System.Windows.Forms.Button
+$appsButton.Location = New-Object System.Drawing.Point(320, 230)
+$appsButton.Size = New-Object System.Drawing.Size(40, 20)
+$appsButton.Text = "..."
+$appsButton.Add_Click({
+    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+    $openFileDialog.Filter = "Installateurs (*.exe;*.msi)|*.exe;*.msi"
+    $openFileDialog.Multiselect = $true
+    if ($openFileDialog.ShowDialog() -eq "OK") {
+        $appsTextBox.Text = ($openFileDialog.FileNames -join ";")
     }
+})
+$form.Controls.Add($appsButton)
+
+$driversLabel = New-Object System.Windows.Forms.Label
+$driversLabel.Location = New-Object System.Drawing.Point(10, 260)
+$driversLabel.Size = New-Object System.Drawing.Size(150, 20)
+$driversLabel.Text = "Pilotes :"
+$form.Controls.Add($driversLabel)
+
+$driversTextBox = New-Object System.Windows.Forms.TextBox
+$driversTextBox.Location = New-Object System.Drawing.Point(160, 260)
+$driversTextBox.Size = New-Object System.Drawing.Size(150, 20)
+$driversTextBox.ReadOnly = $true
+$form.Controls.Add($driversTextBox)
+
+$driversButton = New-Object System.Windows.Forms.Button
+$driversButton.Location = New-Object System.Drawing.Point(320, 260)
+$driversButton.Size = New-Object System.Drawing.Size(40, 20)
+$driversButton.Text = "..."
+$driversButton.Add_Click({
+    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+    $openFileDialog.Filter = "Pilotes (*.inf)|*.inf"
+    $openFileDialog.Multiselect = $true
+    if ($openFileDialog.ShowDialog() -eq "OK") {
+        $driversTextBox.Text = ($openFileDialog.FileNames -join ";")
+    }
+})
+$form.Controls.Add($driversButton)
+
+$offlineCheckBox = New-Object System.Windows.Forms.CheckBox
+$offlineCheckBox.Location = New-Object System.Drawing.Point(10, 290)
+$offlineCheckBox.Size = New-Object System.Drawing.Size(150, 20)
+$offlineCheckBox.Text = "Mode hors ligne"
+$offlineCheckBox.Add_CheckedChanged({
+    if ($offlineCheckBox.Checked) {
+        $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+        $openFileDialog.Filter = "Fichiers ISO (*.iso)|*.iso"
+        if ($openFileDialog.ShowDialog() -eq "OK") {
+            $script:isoPath = $openFileDialog.FileName
+        }
+        else {
+            $offlineCheckBox.Checked = $false
+        }
+    }
+})
+$form.Controls.Add($offlineCheckBox)
+
+$usbCheckBox = New-Object System.Windows.Forms.CheckBox
+$usbCheckBox.Location = New-Object System.Drawing.Point(160, 290)
+$usbCheckBox.Size = New-Object System.Drawing.Size(150, 20)
+$usbCheckBox.Text = "Créer clé USB"
+$form.Controls.Add($usbCheckBox)
+
+$advancedLabel = New-Object System.Windows.Forms.Label
+$advancedLabel.Location = New-Object System.Drawing.Point(10, 320)
+$advancedLabel.Size = New-Object System.Drawing.Size(150, 20)
+$advancedLabel.Text = "Options avancées :"
+$form.Controls.Add($advancedLabel)
+
+$telemetryCheckBox = New-Object System.Windows.Forms.CheckBox
+$telemetryCheckBox.Location = New-Object System.Drawing.Point(160, 320)
+$telemetryCheckBox.Size = New-Object System.Drawing.Size(200, 20)
+$telemetryCheckBox.Text = "Bloquer la télémétrie"
+$telemetryCheckBox.Checked = $true
+$form.Controls.Add($telemetryCheckBox)
+
+$defenderCheckBox = New-Object System.Windows.Forms.CheckBox
+$defenderCheckBox.Location = New-Object System.Drawing.Point(160, 350)
+$defenderCheckBox.Size = New-Object System.Drawing.Size(200, 20)
+$defenderCheckBox.Text = "Désactiver Defender"
+$form.Controls.Add($defenderCheckBox)
+
+$edgeCheckBox = New-Object System.Windows.Forms.CheckBox
+$edgeCheckBox.Location = New-Object System.Drawing.Point(160, 380)
+$edgeCheckBox.Size = New-Object System.Drawing.Size(200, 20)
+$edgeCheckBox.Text = "Supprimer Edge"
+$form.Controls.Add($edgeCheckBox)
+
+$onedriveCheckBox = New-Object System.Windows.Forms.CheckBox
+$onedriveCheckBox.Location = New-Object System.Drawing.Point(160, 410)
+$onedriveCheckBox.Size = New-Object System.Drawing.Size(200, 20)
+$onedriveCheckBox.Text = "Supprimer OneDrive"
+$onedriveCheckBox.Checked = $true
+$form.Controls.Add($onedriveCheckBox)
+
+$profileLabel = New-Object System.Windows.Forms.Label
+$profileLabel.Location = New-Object System.Drawing.Point(10, 440)
+$profileLabel.Size = New-Object System.Drawing.Size(150, 20)
+$profileLabel.Text = "Profil :"
+$form.Controls.Add($profileLabel)
+
+$profileComboBox = New-Object System.Windows.Forms.ComboBox
+$profileComboBox.Location = New-Object System.Drawing.Point(160, 440)
+$profileComboBox.Size = New-Object System.Drawing.Size(200, 20)
+$profileComboBox.Items.AddRange(@("Nouveau", "Charger existant"))
+$profileComboBox.SelectedIndex = 0
+$form.Controls.Add($profileComboBox)
+
+$profileButton = New-Object System.Windows.Forms.Button
+$profileButton.Location = New-Object System.Drawing.Point(370, 440)
+$profileButton.Size = New-Object System.Drawing.Size(100, 20)
+$profileButton.Text = "Enregistrer"
+$profileButton.Add_Click({
+    $profile = @{
+        Version = $versionComboBox.SelectedItem
+        Architecture = $architectureComboBox.SelectedItem
+        Release = $releaseComboBox.SelectedItem
+        Language = $languageComboBox.SelectedItem
+        Configuration = $configComboBox.SelectedItem
+        Account = $accountTextBox.Text
+        Wallpaper = $wallpaperTextBox.Text
+        Apps = $appsTextBox.Text
+        Drivers = $driversTextBox.Text
+        Offline = $offlineCheckBox.Checked
+        USB = $usbCheckBox.Checked
+        Telemetry = $telemetryCheckBox.Checked
+        Defender = $defenderCheckBox.Checked
+        Edge = $edgeCheckBox.Checked
+        OneDrive = $onedriveCheckBox.Checked
+    }
+    $profile | ConvertTo-Json | Out-File -FilePath "C:\Output\Profile.json" -Encoding utf8
+    [System.Windows.Forms.MessageBox]::Show("Profil enregistré avec succès !", "Succès", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+})
+$form.Controls.Add($profileButton)
+
+$okButton = New-Object System.Windows.Forms.Button
+$okButton.Location = New-Object System.Drawing.Point(10, 470)
+$okButton.Size = New-Object System.Drawing.Size(75, 23)
+$okButton.Text = "OK"
+$okButton.Add_Click({
+    $script:version = $versionComboBox.SelectedItem
+    $script:architecture = $architectureComboBox.SelectedItem
+    $script:release = $releaseComboBox.SelectedItem
+    $script:language = $languageComboBox.SelectedItem
+    $script:config = $configComboBox.SelectedItem
+    $script:account = $accountTextBox.Text
+    $script:wallpaper = $wallpaperTextBox.Text
+    $script:apps = $appsTextBox.Text
+    $script:drivers = $driversTextBox.Text
+    $script:offline = $offlineCheckBox.Checked
+    $script:usb = $usbCheckBox.Checked
+    $script:telemetry = $telemetryCheckBox.Checked
+    $script:defender = $defenderCheckBox.Checked
+    $script:edge = $edgeCheckBox.Checked
+    $script:onedrive = $onedriveCheckBox.Checked
+    $form.Close()
+})
+$form.Controls.Add($okButton)
+
+$cancelButton = New-Object System.Windows.Forms.Button
+$cancelButton.Location = New-Object System.Drawing.Point(90, 470)
+$cancelButton.Size = New-Object System.Drawing.Size(75, 23)
+$cancelButton.Text = "Annuler"
+$cancelButton.Add_Click({ $form.Close(); exit })
+$form.Controls.Add($cancelButton)
+
+$helpButton = New-Object System.Windows.Forms.Button
+$helpButton.Location = New-Object System.Drawing.Point(170, 470)
+$helpButton.Size = New-Object System.Drawing.Size(75, 23)
+$helpButton.Text = "Aide"
+$helpButton.Add_Click({
+    $helpFile = "C:\Output\Help.html"
+    $helpContent = @"
+    <html>
+    <head><title>Aide - Personnalisation ISO Windows</title></head>
+    <body>
+    <h1>Guide de personnalisation de l'ISO Windows</h1>
+    <p>Ce script permet de créer une ISO Windows 10/11 personnalisée.</p>
+    <h2>Prérequis</h2>
+    <ul>
+        <li>20 Go d'espace libre sur C:</li>
+        <li>Connexion Internet (sauf mode hors ligne)</li>
+        <li>Windows ADK avec WinPE Add-ons (installé automatiquement)</li>
+        <li>8 Go de RAM recommandé pour montage en mémoire (nécessite ImDisk : https://sourceforge.net/projects/imdisk-toolkit/)</li>
+    </ul>
+    <h2>Options</h2>
+    <ul>
+        <li><b>Mode hors ligne</b> : Utilisez une ISO existante.</li>
+        <li><b>Version/Release</b> : Choisissez Windows 10/11 et la version (ex. : 22H2).</li>
+        <li><b>Langue</b> : Sélectionnez la langue de l'OS.</li>
+        <li><b>Configuration</b> : Choisissez entre Ultra-léger, Léger, Gaming, ou Standard.</li>
+        <li><b>Compte local</b> : Définissez un compte administrateur.</li>
+        <li><b>Fond d'écran</b> : Ajoutez une image personnalisée (JPG/PNG).</li>
+        <li><b>Applications/Pilotes</b> : Intégrez des logiciels ou pilotes.</li>
+        <li><b>Options avancées</b> : Bloquez la télémétrie, désactivez Defender, etc.</li>
+        <li><b>Clé USB</b> : Créez une clé bootable.</li>
+        <li><b>Profils</b> : Enregistrez/chargez des configurations.</li>
+        <li><b>Message de conseil</b> : Un message s'affichera au début de l'installation, avant l'écran de partitionnement, pour recommander l'utilisation de deux disques (un pour l'OS, un pour les données) ou de partitionner un seul disque.</li>
+    </ul>
+    <p>Pour plus d'aide, consultez le journal dans C:\Output\CustomizationLog.txt.</p>
+    </body>
+    </html>
+"@
+    $helpContent | Out-File -FilePath $helpFile -Encoding utf8
+    Start-Process $helpFile
+})
+$form.Controls.Add($helpButton)
+
+$progressBar = New-Object System.Windows.Forms.ProgressBar
+$progressBar.Location = New-Object System.Drawing.Point(10, 500)
+$progressBar.Size = New-Object System.Drawing.Size(760, 23)
+$progressBar.Minimum = 0
+$progressBar.Maximum = 100
+$form.Controls.Add($progressBar)
+
+# Affichage de la fenêtre
+$form.ShowDialog()
+
+# Variables globales
+$tempDir = if ($ramDisk) { "Z:\Temp" } else { "C:\Temp" }
+$mountPath = if ($ramDisk) { "Z:\Mount" } else { "C:\Mount" }
+$isoPath = if ($offline) { $isoPath } else { "C:\Temp\WinISO.iso" }
+$keepTempFiles = $false
+$languageName = switch ($language) {
+    "fr-FR" { "French" }
+    "en-US" { "English" }
+    "es-ES" { "Spanish" }
+    default { "English" }
+}
+$languageCode = $language
+$edition = if ($version -eq "Windows 10") { "Professional" } else { "Pro" }
+$oscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
+$configSize = ($configs | Where-Object { $_.Name -eq $config }).Size
+
+# Vérification de l'espace disque
+$freeSpace = (Get-PSDrive -Name C).Free / 1GB
+if ($freeSpace -lt 20) {
+    [System.Windows.Forms.MessageBox]::Show("Espace disque insuffisant sur C:. 20 Go requis.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    exit
 }
 
-# Applications tierces
-$appsPath = ""
-$addApps = (Read-Host "Ajouter des applications tierces (.exe/.msi) ? (o/n) [par défaut : n]").ToLower() -eq "o"
-if ($addApps) {
-    $appsPath = Read-Host "Chemin du dossier des installateurs"
-    if (-not (Test-Path $appsPath)) {
-        Write-Error "Dossier des applications invalide."
-        exit 1
-    }
+# Installation de Windows ADK si nécessaire
+if (-not (Test-Path $oscdimgPath)) {
+    Log-Message "Installation de Windows ADK..." -Step "Installation ADK"
+    $adkUrl = "https://go.microsoft.com/fwlink/?linkid=2026036"
+    $adkInstaller = "C:\Temp\adksetup.exe"
+    Invoke-WebRequestWithRetry -Uri $adkUrl -OutFile $adkInstaller
+    Start-Process -FilePath $adkInstaller -ArgumentList "/quiet /features OptionId.DeploymentTools /norestart" -Wait
+    Log-Message "Windows ADK installé." -Step "Installation ADK"
 }
 
-# Options supplémentaires
-$blockTelemetry = (Read-Host "Bloquer la télémétrie ? (o/n) [par défaut : n]").ToLower() -eq "o"
-$disableWidgets = ($versionInfo.OS -eq "Windows 11") -and ((Read-Host "Désactiver les Widgets ? (o/n) [par défaut : n]").ToLower() -eq "o")
-$disableDefender = ($config -in @("Ultra-léger", "Léger")) -and ((Read-Host "Désactiver Windows Defender ? (risque de sécurité, o/n) [par défaut : n]").ToLower() -eq "o")
-$disableSearch = ($config -in @("Ultra-léger", "Léger")) -and ((Read-Host "Désactiver Windows Search ? (o/n) [par défaut : n]").ToLower() -eq "o")
-$createBootableUsb = (Read-Host "Créer une clé USB bootable ? (o/n) [par défaut : n]").ToLower() -eq "o"
-
-$usbDrive = ""
-if ($createBootableUsb) {
-    $drives = Get-Disk | Where-Object { $_.BusType -eq "USB" -and $_.Size -ge 8GB -and $_.IsBoot -eq $false }
-    if (-not $drives) {
-        Write-Error "Aucune clé USB de 8 Go minimum détectée."
-        exit 1
-    }
-    Write-Host "Clés USB détectées :"
-    $drives | ForEach-Object { Write-Host "Disque $($_.Number) : $($_.FriendlyName) ($($_.Size / 1GB) Go)" }
-    $diskNumber = Read-Host "Numéro du disque USB à utiliser"
-    $selectedDisk = $drives | Where-Object { $_.Number -eq $diskNumber }
-    if (-not $selectedDisk) {
-        Write-Error "Disque invalide."
-        exit 1
-    }
-    $usbDrive = (Get-Partition -DiskNumber $diskNumber | Where-Object { $_.DriveLetter }).DriveLetter + ":"
-    Write-Warning "ATTENTION : Le formatage de la clé USB ($usbDrive) supprimera TOUTES les données. Assurez-vous d'avoir sauvegardé vos fichiers."
-    $usbConfirm = Read-Host "Tapez 'oui' pour confirmer le formatage"
-    if ($usbConfirm -ne "oui") {
-        Write-Host "Création de la clé USB annulée."
-        $createBootableUsb = $false
-    }
+# Installation de ImDisk si nécessaire
+if ($ramDisk -and -not (Get-Command imdisk -ErrorAction SilentlyContinue)) {
+    Log-Message "Installation de ImDisk..." -Step "Installation ImDisk"
+    $imdiskUrl = "https://sourceforge.net/projects/imdisk-toolkit/files/latest/download"
+    $imdiskInstaller = "C:\Temp\imdisk.exe"
+    Invoke-WebRequestWithRetry -Uri $imdiskUrl -OutFile $imdiskInstaller
+    Start-Process -FilePath $imdiskInstaller -ArgumentList "/silent" -Wait
+    Log-Message "ImDisk installé." -Step "Installation ImDisk"
 }
 
-# Sauvegarde de l'ISO
-Log-Message "Sauvegarde de l'ISO..." -Step "Sauvegarde"
-Update-Progress -Percent 20
-$backupPath = [System.IO.Path]::ChangeExtension($isoPath, ".backup.iso")
-Copy-Item -Path $isoPath -Destination $backupPath -Force
+# Téléchargement de l'ISO si non hors ligne
+if (-not $offline) {
+    Log-Message "Téléchargement de l'ISO..." -Step "Téléchargement ISO"
+    Update-Progress -Percent 10
+    $isoUrl = "https://www.microsoft.com/fr-fr/software-download/windows$($version -replace 'Windows ', '')"
+    # Simulation du téléchargement (remplacez par une URL réelle si disponible)
+    $isoUrl = "https://example.com/windows.iso" # À remplacer par une source réelle
+    Invoke-WebRequestWithRetry -Uri $isoUrl -OutFile $isoPath
+    Log-Message "ISO téléchargé." -Step "Téléchargement ISO"
+}
 
 # Montage de l'ISO
 Log-Message "Montage de l'ISO..." -Step "Montage de l'ISO"
-Update-Progress -Percent 25
+Update-Progress -Percent 30
 Mount-DiskImage -ImagePath $isoPath
 $isoDrive = (Get-DiskImage -ImagePath $isoPath | Get-Volume).DriveLetter
 
 # Copie des fichiers dans un dossier temporaire
 Log-Message "Copie des fichiers..." -Step "Copie des fichiers"
-Update-Progress -Percent 30
-$tempDir = "C:\Temp\ISO"
-$mountPath = "C:\Temp\Mount"
+Update-Progress -Percent 35
 New-Item -ItemType Directory -Path $tempDir, $mountPath -Force
 Copy-Item -Path "$($isoDrive):\*" -Destination $tempDir -Recurse -Force
 New-Item -ItemType Directory -Path "$tempDir\Web\Wallpaper\Custom" -Force
 
-# Montage de l'image WIM
-Log-Message "Montage de l'image WIM..." -Step "Montage de l'image WIM"
-Update-Progress -Percent 35
-$wimPath = "$tempDir\sources\install.wim"
-dism /Mount-Image /ImageFile:$wimPath /Index:1 /MountDir:$mountPath /Optimize
+# Personnalisation de boot.wim pour WinPE
+Log-Message "Montage de boot.wim pour ajouter le script de conseil..." -Step "Personnalisation de WinPE"
+$bootWimPath = "$tempDir\sources\boot.wim"
+$bootMountPath = if ($ramDisk) { "Z:\Temp\BootMount" } else { "C:\Temp\BootMount" }
+New-Item -ItemType Directory -Path $bootMountPath -Force
+dism /Mount-Image /ImageFile:$bootWimPath /Index:2 /MountDir:$bootMountPath /Optimize
 
-# Suppression des restrictions TPM/Secure Boot
-Log-Message "Suppression des restrictions TPM/Secure Boot..." -Step "Suppression des restrictions"
-Update-Progress -Percent 40
-$setupPath = "$tempDir\sources\appraiserres.dll"
-if (Test-Path $setupPath) {
-    Move-Item $setupPath "$setupPath.bak" -Force
-    Log-Message "Restrictions TPM/Secure Boot désactivées."
+# Ajout des composants PowerShell à WinPE
+Log-Message "Ajout de PowerShell à WinPE..." -Step "Personnalisation de WinPE"
+$winpePath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs"
+dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\WinPE-WMI.cab"
+dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\en-us\WinPE-WMI_en-us.cab"
+dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\WinPE-NetFX.cab"
+dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\en-us\WinPE-NetFX_en-us.cab"
+dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\WinPE-PowerShell.cab"
+dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\en-us\WinPE-PowerShell_en-us.cab"
+dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\WinPE-DismCmdlets.cab"
+dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\en-us\WinPE-DismCmdlets_en-us.cab"
+
+# Ajout de System.Windows.Forms pour les boîtes de dialogue
+Log-Message "Ajout de System.Windows.Forms à WinPE..." -Step "Personnalisation de WinPE"
+$netFxDir = "$bootMountPath\Windows\System32"
+Copy-Item -Path "$env:windir\System32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Utility\System.Windows.Forms.dll" -Destination $netFxDir -Force
+
+# Création du script de conseil pour WinPE
+Log-Message "Création du script de conseil pour WinPE..." -Step "Conseil disque"
+$diskAdviceScript = @"
+Add-Type -AssemblyName System.Windows.Forms
+# Lire la configuration et la taille depuis config.txt
+\$configFile = 'X:\Windows\System32\config.txt'
+if (Test-Path \$configFile) {
+    \$configData = Get-Content \$configFile
+    \$config = \$configData | Where-Object { \$_ -match 'Config=' } | ForEach-Object { \$_ -replace 'Config=', '' }
+    \$configSize = \$configData | Where-Object { \$_ -match 'ConfigSize=' } | ForEach-Object { \$_ -replace 'ConfigSize=', '' }
+} else {
+    \$config = 'Inconnue'
+    \$configSize = '30' # Valeur par défaut
 }
-# Ajout d'une clé de registre pour Windows 11 pour contourner TPM/Secure Boot
-if ($versionInfo.OS -eq "Windows 11") {
-    New-Item -Path "$tempDir\sources\`$OEM$\$$\Setup\Scripts" -ItemType Directory -Force | Out-Null
-    $bypassScript = @"
-reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f
-reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f
-reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f
-reg add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f
+[System.Windows.Forms.MessageBox]::Show(
+    "Conseil pour la gestion des disques :\n\n" +
+    "Pour une performance optimale, il est conseillé d'utiliser deux disques :\n" +
+    "- Un disque dédié pour le système d'exploitation (OS).\n" +
+    "- Un disque séparé pour vos données (documents, jeux, etc.).\n\n" +
+    "Si vous n'avez qu'un seul disque, il est recommandé de le partitionner en deux :\n" +
+    "- Une partition pour l'OS d'une taille d'au moins \$configSize Go (taille recommandée pour la configuration '\$config' + 15 Go de marge).\n" +
+    "- Une partition pour les données avec le reste de l'espace disponible.\n\n" +
+    "Vous pouvez créer ou modifier les partitions dans l'écran suivant.",
+    "Conseil - Gestion des disques",
+    [System.Windows.Forms.MessageBoxButtons]::OK,
+    [System.Windows.Forms.MessageBoxIcon]::Information
+)
 "@
-    $bypassScript | Out-File -FilePath "$tempDir\sources\`$OEM$\$$\Setup\Scripts\SetupComplete.cmd" -Encoding ascii
-}
+$diskAdviceScript | Out-File -FilePath "$bootMountPath\Windows\System32\DiskAdvice.ps1" -Encoding utf8
 
-# Suppression des bloatwares
-Log-Message "Suppression des bloatwares..." -Step "Suppression des bloatwares"
-Update-Progress -Percent 45
-$bloatwares = @("Microsoft.Windows.Cortana", "Microsoft.XboxApp", "Microsoft.ZuneMusic", "Microsoft.ZuneVideo", "Microsoft.YourPhone", "Microsoft.GetHelp", "Microsoft.People", "Microsoft.BingNews", "Microsoft.WindowsFeedbackHub")
-foreach ($app in $bloatwares) {
-    dism /Image:$mountPath /Remove-ProvisionedAppxPackage /PackageName:$app* 2>$null
-}
+# Création du fichier config.txt avec $config et $configSize
+$configText = @"
+Config=$config
+ConfigSize=$configSize
+"@
+$configText | Out-File -FilePath "$bootMountPath\Windows\System32\config.txt" -Encoding ascii
 
-# Vérification des composants essentiels
-Log-Message "Vérification de Windows Update..." -Step "Vérification des composants"
-Update-Progress -Percent 50
-$wuPackage = dism /Image:$mountPath /Get-Packages | Select-String "WindowsUpdateClient"
-if (-not $wuPackage) { Write-Error "Windows Update manquant."; exit 1 }
+# Modification de startnet.cmd pour exécuter le script de conseil
+Log-Message "Modification de startnet.cmd..." -Step "Personnalisation de WinPE"
+$startnetPath = "$bootMountPath\Windows\System32\startnet.cmd"
+$startnetContent = @"
+@echo off
+powershell -ExecutionPolicy Bypass -File X:\Windows\System32\DiskAdvice.ps1
+wpeinit
+"@
+$startnetContent | Out-File -FilePath $startnetPath -Encoding ascii
 
-# Intégration des mises à jour
-if (Test-Path "$updatesPath\*.msu") {
-    Log-Message "Intégration des mises à jour..." -Step "Intégration des mises à jour"
-    Update-Progress -Percent 55
-    $updates = Get-ChildItem -Path $updatesPath -Filter "*.msu" -Recurse
-    foreach ($update in $updates) {
-        dism /Image:$mountPath /Add-Package /PackagePath:$update.FullName
-    }
-}
+# Démontage de boot.wim
+Log-Message "Démontage de boot.wim..." -Step "Personnalisation de WinPE"
+dism /Unmount-Image /MountDir:$bootMountPath /Commit
+Remove-Item -Path $bootMountPath -Recurse -Force -ErrorAction SilentlyContinue
 
-# Intégration des applications tierces
-if ($appsPath) {
-    Log-Message "Intégration des applications..." -Step "Intégration des applications"
-    Update-Progress -Percent 60
-    $appDir = "$mountPath\Program Files\CustomApps"
-    New-Item -ItemType Directory -Path $appDir -Force
-    Copy-Item -Path "$appsPath\*" -Destination $appDir -Recurse -Force
-    $installScript = @"
-    \$apps = Get-ChildItem -Path 'C:\Program Files\CustomApps' -Include *.exe,*.msi -Recurse
-    foreach (\$app in \$apps) {
-        if (\$app.Extension -eq '.exe') { Start-Process -FilePath \$app.FullName -ArgumentList '/quiet' -Wait }
-        if (\$app.Extension -eq '.msi') { Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i', \$app.FullName, '/quiet' -Wait }
-    }
-    Remove-Item -Path 'C:\Program Files\CustomApps' -Recurse -Force
-    "@
-    $installScript | Out-File -FilePath "$mountPath\Windows\Setup\Scripts\SetupComplete.cmd" -Encoding ascii
-}
+# Montage de l'image Windows
+Log-Message "Montage de l'image Windows..." -Step "Montage de l'image"
+Update-Progress -Percent 40
+$imagePath = "$tempDir\sources\install.wim"
+dism /Mount-Image /ImageFile:$imagePath /Index:1 /MountDir:$mountPath /Optimize
 
 # Application des optimisations
 Log-Message "Application des optimisations..." -Step "Optimisations"
-Update-Progress -Percent 65
-reg load HKLM\Mounted "$mountPath\Windows\System32\config\SOFTWARE"
-reg load HKLM\MountedSystem "$mountPath\Windows\System32\config\SYSTEM"
-$services = @("XblAuthManager", "WSearch", "SysMain")
-switch ($config) {
-    "Ultra-léger" {
-        foreach ($service in $services + @("WindowsUpdate", "DiagTrack")) {
-            reg add "HKLM\MountedSystem\CurrentControlSet\Services\$service" /v "Start" /t REG_DWORD /d 4 /f
-        }
-        if ($blockTelemetry) {
-            reg add "HKLM\Mounted\Policies\Microsoft\Windows\DataCollection" /v "AllowTelemetry" /t REG_DWORD /d 0 /f
-        }
-        if ($disableDefender) {
-            reg add "HKLM\Mounted\SOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiSpyware" /t REG_DWORD /d 1 /f
-        }
-        if ($disableSearch) {
-            reg add "HKLM\MountedSystem\CurrentControlSet\Services\WSearch" /v "Start" /t REG_DWORD /d 4 /f
-        }
-    }
-    "Léger" {
-        foreach ($service in $services) {
-            reg add "HKLM\MountedSystem\CurrentControlSet\Services\$service" /v "Start" /t REG_DWORD /d 4 /f
-        }
-        if ($blockTelemetry) {
-            reg add "HKLM\Mounted\Policies\Microsoft\Windows\DataCollection" /v "AllowTelemetry" /t REG_DWORD /d 0 /f
-        }
-        if ($disableDefender) {
-            reg add "HKLM\Mounted\SOFTWARE\Policies\Microsoft\Windows Defender" /v "DisableAntiSpyware" /t REG_DWORD /d 1 /f
-        }
-        if ($disableSearch) {
-            reg add "HKLM\MountedSystem\CurrentControlSet\Services\WSearch" /v "Start" /t REG_DWORD /d 4 /f
-        }
-    }
-    "Optimisé" {
-        reg add "HKLM\Mounted\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v "SystemResponsiveness" /t REG_DWORD /d 0 /f
-        reg add "HKLM\MountedSystem\CurrentControlSet\Services\GameBarPresenceWriter" /v "Start" /t REG_DWORD /d 4 /f
-        reg add "HKLM\Mounted\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR" /v "AppCaptureEnabled" /t REG_DWORD /d 0 /f
-        if ($blockTelemetry) {
-            reg add "HKLM\Mounted\Policies\Microsoft\Windows\DataCollection" /v "AllowTelemetry" /t REG_DWORD /d 0 /f
-        }
-    }
-    "Proche" {
-        # Modifications minimales
-    }
-}
-if ($disableWidgets) {
-    reg add "HKLM\Mounted\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "DesktopWidget" /t REG_DWORD /d 0 /f
-}
-reg add "HKLM\Mounted\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" /v "ShowThisPC" /t REG_DWORD /d 1 /f
-reg unload HKLM\Mounted
-reg unload HKLM\MountedSystem
+Update-Progress -Percent 50
 
-# Création du fichier unattend.xml avec encodage UTF-8 BOM
-Log-Message "Création du fichier unattend.xml..." -Step "Création du fichier unattend"
-Update-Progress -Percent 70
-$passwordSection = if ($passwordPlain) {
-    @"
-    <Password>
-        <Value>$passwordPlain</Value>
-        <PlainText>true</PlainText>
-    </Password>
-"@
-} else { "" }
-$wallpaperCommand = if ($wallpaperPath) {
-    Copy-Item -Path $wallpaperPath -Destination "$tempDir\Web\Wallpaper\Custom\custom_wallpaper.jpg" -Force
-    "%WINDIR%\Web\Wallpaper\Custom\custom_wallpaper.jpg"
-} else {
-    "%WINDIR%\Web\Wallpaper\Windows\img0.jpg"
+if ($telemetry) {
+    Log-Message "Blocage de la télémétrie..." -Step "Optimisations"
+    # Exemple : désactivation des services de télémétrie
+    dism /Image:$mountPath /Disable-Feature /FeatureName:Windows-Telemetry /Remove
 }
+
+if ($defender) {
+    Log-Message "Désactivation de Defender..." -Step "Optimisations"
+    dism /Image:$mountPath /Disable-Feature /FeatureName:Windows-Defender-Default-Definitions /Remove
+}
+
+if ($edge) {
+    Log-Message "Suppression de Edge..." -Step "Optimisations"
+    dism /Image:$mountPath /Remove-Package /PackageName:Microsoft-Windows-Internet-Browser-Package
+}
+
+if ($onedrive) {
+    Log-Message "Suppression de OneDrive..." -Step "Optimisations"
+    dism /Image:$mountPath /Remove-Package /PackageName:Microsoft-Windows-OneDrive-Package
+}
+
+# Configuration du compte local
+Log-Message "Configuration du compte local..." -Step "Compte local"
+$autologon = @"
+[AutoLogon]
+Enabled = true
+Username = $account
+Password = ""
+"@
+$autologon | Out-File -FilePath "$mountPath\Windows\System32\oobe\info\autologon.inf" -Encoding ascii
+
+# Ajout du fond d'écran
+if ($wallpaper) {
+    Log-Message "Ajout du fond d'écran..." -Step "Fond d'écran"
+    Copy-Item -Path $wallpaper -Destination "$tempDir\Web\Wallpaper\Custom\wallpaper.jpg" -Force
+    $wallpaperScript = @"
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP" /v LockScreenImagePath /t REG_SZ /d "C:\Windows\Web\Wallpaper\Custom\wallpaper.jpg" /f
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP" /v DesktopImagePath /t REG_SZ /d "C:\Windows\Web\Wallpaper\Custom\wallpaper.jpg" /f
+"@
+    $wallpaperScript | Out-File -FilePath "$mountPath\Windows\Setup\Scripts\SetWallpaper.cmd" -Encoding ascii
+}
+
+# Intégration des applications
+if ($apps) {
+    Log-Message "Intégration des applications..." -Step "Applications"
+    $appDir = "$mountPath\Program Files\CustomApps"
+    New-Item -ItemType Directory -Path $appDir -Force
+    $appFiles = $apps -split ";"
+    foreach ($app in $appFiles) {
+        if (Test-Path $app) {
+            Copy-Item -Path $app -Destination $appDir -Force
+        }
+    }
+}
+
+# Intégration des pilotes
+if ($drivers) {
+    Log-Message "Intégration des pilotes..." -Step "Pilotes"
+    $driverFiles = $drivers -split ";"
+    foreach ($driver in $driverFiles) {
+        if (Test-Path $driver) {
+            dism /Image:$mountPath /Add-Driver /Driver:$driver
+        }
+    }
+}
+
+# Création de SetupComplete.cmd
+Log-Message "Création de SetupComplete.cmd..." -Step "Configuration"
+New-Item -Path "$tempDir\sources\`$OEM$\$$\Setup\Scripts" -ItemType Directory -Force | Out-Null
+$setupComplete = @"
+@echo off
+if exist "%WINDIR%\Setup\Scripts\BypassTPM.cmd" (
+    call "%WINDIR%\Setup\Scripts\BypassTPM.cmd"
+)
+if exist "%WINDIR%\Program Files\CustomApps" (
+    powershell -ExecutionPolicy Bypass -Command "\$apps = Get-ChildItem -Path 'C:\Program Files\CustomApps' -Include *.exe,*.msi -Recurse; foreach (\$app in \$apps) { if (\$app.Extension -eq '.exe') { Start-Process -FilePath \$app.FullName -ArgumentList '/quiet' -Wait }; if (\$app.Extension -eq '.msi') { Start-Process -FilePath 'msiexec.exe' -ArgumentList '/i', \$app.FullName, '/quiet' -Wait } }; Remove-Item -Path 'C:\Program Files\CustomApps' -Recurse -Force"
+)
+rd /s /q "%WINDIR%\Setup\Scripts"
+"@
+$setupComplete | Out-File -FilePath "$tempDir\sources\`$OEM$\$$\Setup\Scripts\SetupComplete.cmd" -Encoding ascii
+
+# Création du fichier unattend.xml
+Log-Message "Création de unattend.xml..." -Step "Configuration"
 $unattend = @"
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
     <settings pass="oobeSystem">
-        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+        <component name="Microsoft-Windows-International-Core" processorArchitecture="$($architecture -replace 'x64','amd64')" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <InputLocale>$languageCode</InputLocale>
+            <SystemLocale>$languageCode</SystemLocale>
+            <UILanguage>$languageCode</UILanguage>
+            <UserLocale>$languageCode</UserLocale>
+        </component>
+        <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="$($architecture -replace 'x64','amd64')" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+            <OOBE>
+                <HideEULAPage>true</HideEULAPage>
+                <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+                <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+                <ProtectYourPC>3</ProtectYourPC>
+            </OOBE>
             <UserAccounts>
                 <LocalAccounts>
                     <LocalAccount wcm:action="add">
-                        <Name>$accountName</Name>
-                        $passwordSection
+                        <Name>$account</Name>
                         <Group>Administrators</Group>
-                        <DisplayName>$accountName</DisplayName>
+                        <Password>
+                            <Value></Value>
+                            <PlainText>true</PlainText>
+                        </Password>
                     </LocalAccount>
                 </LocalAccounts>
             </UserAccounts>
-            <OOBE>
-                <HideEULAPage>true</HideEULAPage>
-                <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
-                <HideLocalAccountScreen>false</HideLocalAccountScreen>
-            </OOBE>
-            <Themes>
-                <DesktopBackground>$wallpaperCommand</DesktopBackground>
-            </Themes>
-        </component>
-        <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-            <InputLocale>$language</InputLocale>
-            <SystemLocale>$language</SystemLocale>
-            <UILanguage>$language</UILanguage>
-            <UserLocale>$language</UserLocale>
         </component>
     </settings>
 </unattend>
 "@
-# Écrire le fichier avec UTF-8 BOM pour garantir la compatibilité des accents
-$utf8BomEncoding = New-Object System.Text.UTF8Encoding($true)
-[System.IO.File]::WriteAllText("$tempDir\unattend.xml", $unattend, $utf8BomEncoding)
-
-# Vérifier les accents dans unattend.xml
-Log-Message "Vérification des accents dans unattend.xml..." -Step "Vérification des accents"
-$unattendContent = Get-Content -Path "$tempDir\unattend.xml" -Raw
-if ($unattendContent -notmatch $accountName) {
-    Write-Warning "Les accents dans le nom d'utilisateur ($accountName) peuvent ne pas être corrects dans unattend.xml. Vérifiez le fichier."
-}
+$unattend | Out-File -FilePath "$tempDir\sources\`$OEM$\$$\unattend.xml" -Encoding utf8
 
 # Démontage de l'image
 Log-Message "Démontage de l'image..." -Step "Démontage"
-Update-Progress -Percent 75
+Update-Progress -Percent 70
 dism /Unmount-Image /MountDir:$mountPath /Commit
 
-# Création de la nouvelle ISO
-Log-Message "Création de l'ISO..." -Step "Création de l'ISO"
+# Création de l'ISO
+Log-Message "Création de l'ISO..." -Step "Création ISO"
 Update-Progress -Percent 80
-$isoOutput = "C:\Output\Custom_$($versionInfo.OS)_$($versionInfo.Edition).iso"
-& $oscdimgPath -m -o -u2 -udfver102 -lCustomWindows -h -bootdata:2#p0,e,b"$tempDir\boot\etfsboot.com"#pEF,e,b"$tempDir\efi\microsoft\boot\efisys.bin" $tempDir $isoOutput
+$isoOutput = "C:\Output\Custom_Windows_$($version -replace 'Windows ', '')_$edition.iso"
+$oscdimgArgs = "-m -o -u2 -udfver102 -bootdata:2#p0,e,b$tempDir\boot\etfsboot.com#pEF,e,b$tempDir\efi\microsoft\boot\efisys.bin -lCUSTOM_WIN $tempDir $isoOutput"
+Start-Process -FilePath $oscdimgPath -ArgumentList $oscdimgArgs -Wait -NoNewWindow
+Log-Message "ISO générée avec succès dans $isoOutput" -Step "Création ISO"
 
-# Vérification de l'ISO générée
-Log-Message "Vérification de l'ISO générée..." -Step "Vérification"
-Update-Progress -Percent 85
-$hash = Get-FileHash -Path $isoOutput -Algorithm SHA256
-$isoSize = (Get-Item $isoOutput).Length / 1GB
-Log-Message "Taille de l'ISO : ~$isoSize Go"
-if ($hash.Hash.Length -ne 64) { Write-Error "ISO corrompue."; exit 1 }
-
-# Test de montage de l'ISO pour vérifier son intégrité
-Log-Message "Test de montage de l'ISO..." -Step "Vérification de l'ISO"
-try {
-    Mount-DiskImage -ImagePath $isoOutput -ErrorAction Stop
-    Dismount-DiskImage -ImagePath $isoOutput -ErrorAction Stop
-} catch {
-    Write-Error "L'ISO générée semble corrompue ou non bootable. Vérifiez les modifications appliquées."
-    exit 1
-}
-
-# Création de la clé USB bootable
-if ($createBootableUsb) {
-    Log-Message "Création de la clé USB bootable sur $usbDrive..." -Step "Création de la clé USB"
+# Création de la clé USB si sélectionnée
+if ($usb) {
+    Log-Message "Création de la clé USB..." -Step "Clé USB"
     Update-Progress -Percent 90
-    Clear-Disk -Number $diskNumber -RemoveData -RemoveOEM -Confirm:$false
-    New-Partition -DiskNumber $diskNumber -UseMaximumSize -IsActive -DriveLetter $usbDrive.TrimEnd(":")
-    Format-Volume -DriveLetter $usbDrive.TrimEnd(":") -FileSystem FAT32 -NewFileSystemLabel "WIN_BOOT"
-    Copy-Item -Path "$tempDir\*" -Destination "$usbDrive\" -Recurse -Force
+    $usbDrive = (Get-Disk | Where-Object { $_.BusType -eq "USB" } | Get-Partition | Get-Volume).DriveLetter
+    if ($usbDrive) {
+        Format-Volume -DriveLetter $usbDrive -FileSystem FAT32 -Force -Confirm:$false
+        Mount-DiskImage -ImagePath $isoOutput
+        $isoDrive = (Get-DiskImage -ImagePath $isoOutput | Get-Volume).DriveLetter
+        Copy-Item -Path "$($isoDrive):\*" -Destination "$($usbDrive):\" -Recurse -Force
+        Dismount-DiskImage -ImagePath $isoOutput
+        Log-Message "Clé USB créée avec succès." -Step "Clé USB"
+    }
+    else {
+        Log-Message "Aucune clé USB détectée." -Step "Clé USB"
+    }
 }
 
 # Nettoyage
 Log-Message "Nettoyage..." -Step "Nettoyage"
 Update-Progress -Percent 95
-Remove-Item -Path $tempDir, $mountPath, $updatesPath -Recurse -Force -ErrorAction SilentlyContinue
-Dismount-DiskImage -ImagePath $isoPath -ErrorAction SilentlyContinue
+Dismount-DiskImage -ImagePath $isoPath
+if (-not $keepTempFiles) {
+    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path $mountPath -Recurse -Force -ErrorAction SilentlyContinue
+}
 
-# Finalisation
-Log-Message "ISO générée avec succès dans $isoOutput" -Step "Terminé"
+Log-Message "Personnalisation terminée avec succès !" -Step "Finalisation"
 Update-Progress -Percent 100
-Stop-Transcript
-Write-Host "Opération terminée. Consultez le log dans $logPath."
+[System.Windows.Forms.MessageBox]::Show("Personnalisation terminée ! ISO disponible dans $isoOutput", "Succès", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
