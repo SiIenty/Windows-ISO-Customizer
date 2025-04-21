@@ -1,6 +1,6 @@
-# CustomWindowsISO_NoWin10.ps1
+# CustomWindowsISO_Enhanced.ps1
 # Script PowerShell pour personnaliser une ISO Windows 11 avec message de conseil dans WinPE
-# Windows 10 retiré, mode hors ligne par défaut, encodage UTF-8, plus de langues, police compatible
+# Mode hors ligne obligatoire, Windows 10 supprimé, encodage UTF-8 renforcé, sélection de clé USB
 
 # Forcer l'encodage UTF-8 globalement
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
@@ -28,7 +28,8 @@ function Log-Message {
         [string]$Message,
         [string]$Step
     )
-    chcp 65001 | Out-Null # Assurer l'encodage UTF-8 pour chaque log
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    chcp 65001 | Out-Null
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "[$timestamp] $Step : $Message"
     Write-Host $logEntry
@@ -44,27 +45,6 @@ function Update-Progress {
     $form.Refresh()
 }
 
-# Fonction pour télécharger avec gestion des erreurs
-function Invoke-WebRequestWithRetry {
-    param (
-        [string]$Uri,
-        [string]$OutFile,
-        [int]$Retries = 3,
-        [int]$Delay = 5
-    )
-    for ($i = 1; $i -le $Retries; $i++) {
-        try {
-            $response = Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-            return $response
-        }
-        catch {
-            Log-Message "Tentative $i/$Retries échouée : $_" -Step "Téléchargement"
-            if ($i -lt $Retries) { Start-Sleep -Seconds $Delay }
-            else { throw $_ }
-        }
-    }
-}
-
 # Création du dossier de sortie
 $null = New-Item -ItemType Directory -Path "C:\Output" -Force
 
@@ -73,7 +53,7 @@ $configs = @(
     [PSCustomObject]@{ Name = "Ultra-léger (8-10 Go, minimaliste, services réduits)"; Size = 25 }
     [PSCustomObject]@{ Name = "Léger (12-14 Go, bloatwares supprimés)"; Size = 29 }
     [PSCustomObject]@{ Name = "Optimisé pour le gaming (15-18 Go, performances maximales)"; Size = 33 }
-    [PSCustomObject]@{ Name = "Proche de Windows de base (18-22 Go, sans bloatwares ni restrictions)"; Size = 37 }
+    [PSCustomObject]@{ Name = "Proche de Windows de base (18-22 Go, sans bloatwares)"; Size = 37 }
 )
 
 # Création de l'interface graphique
@@ -84,7 +64,7 @@ $form = New-Object System.Windows.Forms.Form
 $form.Text = "Personnalisation ISO Windows 11"
 $form.Size = New-Object System.Drawing.Size(800, 600)
 $form.StartPosition = "CenterScreen"
-$form.Font = New-Object System.Drawing.Font("Segoe UI", 10) # Police compatible UTF-8
+$form.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 
 # Éléments de l'interface
 $versionLabel = New-Object System.Windows.Forms.Label
@@ -270,23 +250,25 @@ $offlineCheckBox = New-Object System.Windows.Forms.CheckBox
 $offlineCheckBox.Location = New-Object System.Drawing.Point(10, 290)
 $offlineCheckBox.Size = New-Object System.Drawing.Size(150, 20)
 $offlineCheckBox.Text = "Mode hors ligne"
-$offlineCheckBox.Checked = $true # Mode hors ligne par défaut
+$offlineCheckBox.Checked = $true
+$offlineCheckBox.Enabled = $false # Mode hors ligne forcé
 $offlineCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $offlineCheckBox.Add_CheckedChanged({
-    if ($offlineCheckBox.Checked) {
-        $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-        $openFileDialog.Filter = "Fichiers ISO (*.iso)|*.iso"
-        if ($openFileDialog.ShowDialog() -eq "OK") {
-            $script:isoPath = $openFileDialog.FileName
-        }
-        else {
-            $offlineCheckBox.Checked = $false
-        }
+    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+    $openFileDialog.Filter = "Fichiers ISO (*.iso)|*.iso"
+    if ($openFileDialog.ShowDialog() -eq "OK") {
+        $script:isoPath = $openFileDialog.FileName
+    }
+    else {
+        [System.Windows.Forms.MessageBox]::Show("Veuillez sélectionner une ISO Windows 11.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        $form.Close()
+        exit
     }
 })
 $form.Controls.Add($offlineCheckBox)
 
 $usbCheckBox = New-Object System.Windows.Forms.CheckBox
+$usbCheckBox.Location = New-Object System.Windows.Forms.CheckBox
 $usbCheckBox.Location = New-Object System.Drawing.Point(160, 290)
 $usbCheckBox.Size = New-Object System.Drawing.Size(150, 20)
 $usbCheckBox.Text = "Créer clé USB"
@@ -394,6 +376,10 @@ $okButton.Add_Click({
     $script:defender = $defenderCheckBox.Checked
     $script:edge = $edgeCheckBox.Checked
     $script:onedrive = $onedriveCheckBox.Checked
+    if (-not $script:isoPath -or -not (Test-Path $script:isoPath)) {
+        [System.Windows.Forms.MessageBox]::Show("Chemin de l'ISO invalide. Veuillez sélectionner une ISO valide.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
     $form.Close()
 })
 $form.Controls.Add($okButton)
@@ -405,7 +391,8 @@ $cancelButton.Text = "Annuler"
 $cancelButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $cancelButton.Add_Click({ 
     Log-Message "Script annulé par l'utilisateur." -Step "Annulation"
-    $form.Close(); exit 
+    $form.Close()
+    exit 
 })
 $form.Controls.Add($cancelButton)
 
@@ -425,23 +412,23 @@ $helpButton.Add_Click({
     <h2>Prérequis</h2>
     <ul>
         <li>20 Go d'espace libre sur C:</li>
-        <li>Une ISO Windows 11 téléchargée manuellement pour le mode hors ligne</li>
+        <li>Une ISO Windows 11 téléchargée manuellement</li>
         <li>Windows ADK avec WinPE Add-ons (installé automatiquement)</li>
-        <li>8 Go de RAM recommandé pour montage en mémoire (nécessite ImDisk : https://sourceforge.net/projects/imdisk-toolkit/)</li>
+        <li>8 Go de RAM recommandé</li>
     </ul>
     <h2>Options</h2>
     <ul>
         <li><b>Mode hors ligne</b> : Sélectionnez une ISO Windows 11 existante (obligatoire).</li>
         <li><b>Release</b> : Choisissez la version (ex. : 22H2).</li>
-        <li><b>Langue</b> : Sélectionnez la langue de l'OS (ex. : Français, Anglais, Allemand).</li>
+        <li><b>Langue</b> : Sélectionnez la langue de l'OS.</li>
         <li><b>Configuration</b> : Choisissez entre Ultra-léger, Léger, Gaming, ou Standard.</li>
         <li><b>Compte local</b> : Définissez un compte administrateur.</li>
-        <li><b>Fond d'écran</b> : Ajoutez une image personnalisée (JPG/PNG).</li>
+        <li><b>Fond d'écran</b> : Ajoutez une image personnalisée (JPG/PNG, facultatif).</li>
         <li><b>Applications/Pilotes</b> : Intégrez des logiciels ou pilotes.</li>
         <li><b>Options avancées</b> : Bloquez la télémétrie, désactivez Defender, etc.</li>
-        <li><b>Clé USB</b> : Créez une clé bootable.</li>
+        <li><b>Clé USB</b> : Créez une clé bootable (choix de la clé).</li>
         <li><b>Profils</b> : Enregistrez/chargez des configurations.</li>
-        <li><b>Message de conseil</b> : Un message s'affichera au début de l'installation, avant l'écran de partitionnement, pour recommander l'utilisation de deux disques (un pour l'OS, un pour les données) ou de partitionner un seul disque.</li>
+        <li><b>Message de conseil</b> : Un message s'affichera au début de l'installation.</li>
     </ul>
     <p>Pour plus d'aide, consultez le journal dans C:\Output\CustomizationLog.txt.</p>
     </body>
@@ -459,13 +446,22 @@ $progressBar.Minimum = 0
 $progressBar.Maximum = 100
 $form.Controls.Add($progressBar)
 
+# Forcer la sélection de l'ISO au démarrage
+$openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+$openFileDialog.Filter = "Fichiers ISO (*.iso)|*.iso"
+if ($openFileDialog.ShowDialog() -ne "OK") {
+    [System.Windows.Forms.MessageBox]::Show("Veuillez sélectionner une ISO Windows 11.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    exit
+}
+$script:isoPath = $openFileDialog.FileName
+
 # Affichage de la fenêtre
 $form.ShowDialog()
 
 # Variables globales
-$tempDir = if ($ramDisk) { "Z:\Temp" } else { "C:\Temp" }
-$mountPath = if ($ramDisk) { "Z:\Mount" } else { "C:\Mount" }
-$isoPath = if ($offline) { $isoPath } else { "C:\Temp\WinISO.iso" }
+$tempDir = "C:\Temp"
+$mountPath = "C:\Mount"
+$isoPath = $script:isoPath
 $keepTempFiles = $false
 $languageName = switch ($language) {
     "Français (fr-FR)" { "French" }
@@ -479,7 +475,7 @@ $languageName = switch ($language) {
     default { "English" }
 }
 $languageCode = $language -replace ".*\((.*)\)", '$1'
-$edition = "Pro" # Toujours Pro pour Windows 11
+$edition = "Pro"
 $oscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
 $configSize = ($configs | Where-Object { $_.Name -eq $config }).Size
 
@@ -490,38 +486,44 @@ if ($freeSpace -lt 20) {
     exit
 }
 
+# Vérification des permissions sur les dossiers temporaires
+Log-Message "Vérification des permissions sur les dossiers temporaires..." -Step "Préparation"
+$null = New-Item -ItemType Directory -Path $tempDir, $mountPath -Force
+$acl = Get-Acl -Path $tempDir
+$acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+$acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+Set-Acl -Path $tempDir -AclObject $acl
+Set-Acl -Path $mountPath -AclObject $acl
+
 # Installation de Windows ADK si nécessaire
 if (-not (Test-Path $oscdimgPath)) {
     Log-Message "Installation de Windows ADK..." -Step "Installation ADK"
     $adkUrl = "https://go.microsoft.com/fwlink/?linkid=2026036"
-    $adkInstaller = "C:\Temp\adksetup.exe"
-    Invoke-WebRequestWithRetry -Uri $adkUrl -OutFile $adkInstaller
-    Start-Process -FilePath $adkInstaller -ArgumentList "/quiet /features OptionId.DeploymentTools OptionId.WindowsPreinstallationEnvironment /norestart" -Wait
-    Log-Message "Windows ADK installé." -Step "Installation ADK"
-}
-
-# Installation de ImDisk si nécessaire
-if ($ramDisk -and -not (Get-Command imdisk -ErrorAction SilentlyContinue)) {
-    Log-Message "Installation de ImDisk..." -Step "Installation ImDisk"
-    $imdiskUrl = "https://sourceforge.net/projects/imdisk-toolkit/files/latest/download"
-    $imdiskInstaller = "C:\Temp\imdisk.exe"
-    Invoke-WebRequestWithRetry -Uri $imdiskUrl -OutFile $imdiskInstaller
-    Start-Process -FilePath $imdiskInstaller -ArgumentList "/silent" -Wait
-    Log-Message "ImDisk installé." -Step "Installation ImDisk"
-}
-
-# Téléchargement de l'ISO si non hors ligne
-if (-not $offline) {
-    Log-Message "Téléchargement de l'ISO non disponible. Veuillez utiliser le mode hors ligne et sélectionner une ISO." -Step "Téléchargement ISO"
-    [System.Windows.Forms.MessageBox]::Show("Le téléchargement automatique de l'ISO n'est pas disponible. Veuillez cocher 'Mode hors ligne' et sélectionner une ISO Windows 11 téléchargée manuellement.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-    exit
+    $adkInstaller = "$tempDir\adksetup.exe"
+    try {
+        Invoke-WebRequest -Uri $adkUrl -OutFile $adkInstaller -ErrorAction Stop
+        Start-Process -FilePath $adkInstaller -ArgumentList "/quiet /features OptionId.DeploymentTools OptionId.WindowsPreinstallationEnvironment /norestart" -Wait
+        Log-Message "Windows ADK installé." -Step "Installation ADK"
+    }
+    catch {
+        Log-Message "Échec de l'installation de Windows ADK : $_" -Step "Installation ADK"
+        [System.Windows.Forms.MessageBox]::Show("Échec de l'installation de Windows ADK. Veuillez l'installer manuellement.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        exit
+    }
 }
 
 # Montage de l'ISO
 Log-Message "Montage de l'ISO..." -Step "Montage de l'ISO"
 Update-Progress -Percent 30
-Mount-DiskImage -ImagePath $isoPath
-$isoDrive = (Get-DiskImage -ImagePath $isoPath | Get-Volume).DriveLetter
+try {
+    Mount-DiskImage -ImagePath $isoPath -ErrorAction Stop
+    $isoDrive = (Get-DiskImage -ImagePath $isoPath | Get-Volume).DriveLetter
+}
+catch {
+    Log-Message "Échec du montage de l'ISO : $_" -Step "Montage de l'ISO"
+    [System.Windows.Forms.MessageBox]::Show("Échec du montage de l'ISO. Vérifiez le fichier ISO.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    exit
+}
 
 # Copie des fichiers dans un dossier temporaire
 Log-Message "Copie des fichiers..." -Step "Copie des fichiers"
@@ -533,21 +535,29 @@ New-Item -ItemType Directory -Path "$tempDir\Web\Wallpaper\Custom" -Force
 # Personnalisation de boot.wim pour WinPE
 Log-Message "Montage de boot.wim pour ajouter le script de conseil..." -Step "Personnalisation de WinPE"
 $bootWimPath = "$tempDir\sources\boot.wim"
-$bootMountPath = if ($ramDisk) { "Z:\Temp\BootMount" } else { "C:\Temp\BootMount" }
+$bootMountPath = "$tempDir\BootMount"
 New-Item -ItemType Directory -Path $bootMountPath -Force
-dism /Mount-Image /ImageFile:$bootWimPath /Index:2 /MountDir:$bootMountPath /Optimize
+try {
+    Start-Process -FilePath "dism" -ArgumentList "/Mount-Image /ImageFile:$bootWimPath /Index:2 /MountDir:$bootMountPath /Optimize" -Wait -NoNewWindow -ErrorAction Stop
+}
+catch {
+    Log-Message "Échec du montage de boot.wim : $_" -Step "Personnalisation de WinPE"
+    [System.Windows.Forms.MessageBox]::Show("Échec du montage de boot.wim. Vérifiez les permissions.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    exit
+}
 
 # Ajout des composants PowerShell à WinPE
 Log-Message "Ajout de PowerShell à WinPE..." -Step "Personnalisation de WinPE"
 $winpePath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs"
-dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\WinPE-WMI.cab"
-dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\en-us\WinPE-WMI_en-us.cab"
-dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\WinPE-NetFX.cab"
-dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\en-us\WinPE-NetFX_en-us.cab"
-dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\WinPE-PowerShell.cab"
-dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\en-us\WinPE-PowerShell_en-us.cab"
-dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\WinPE-DismCmdlets.cab"
-dism /Image:$bootMountPath /Add-Package /PackagePath:"$winpePath\en-us\WinPE-DismCmdlets_en-us.cab"
+$packages = @(
+    "WinPE-WMI.cab", "en-us\WinPE-WMI_en-us.cab",
+    "WinPE-NetFX.cab", "en-us\WinPE-NetFX_en-us.cab",
+    "WinPE-PowerShell.cab", "en-us\WinPE-PowerShell_en-us.cab",
+    "WinPE-DismCmdlets.cab", "en-us\WinPE-DismCmdlets_en-us.cab"
+)
+foreach ($pkg in $packages) {
+    Start-Process -FilePath "dism" -ArgumentList "/Image:$bootMountPath /Add-Package /PackagePath:`"$winpePath\$pkg`"" -Wait -NoNewWindow
+}
 
 # Ajout de System.Windows.Forms pour les boîtes de dialogue
 Log-Message "Ajout de System.Windows.Forms à WinPE..." -Step "Personnalisation de WinPE"
@@ -558,15 +568,14 @@ Copy-Item -Path "$env:windir\System32\WindowsPowerShell\v1.0\Modules\Microsoft.P
 Log-Message "Création du script de conseil pour WinPE..." -Step "Conseil disque"
 $diskAdviceScript = @"
 Add-Type -AssemblyName System.Windows.Forms
-# Lire la configuration et la taille depuis config.txt
-\$configFile = 'X:\Windows\System32\config.txt'
-if (Test-Path \$configFile) {
-    \$configData = Get-Content \$configFile
-    \$config = \$configData | Where-Object { \$_ -match 'Config=' } | ForEach-Object { \$_ -replace 'Config=', '' }
-    \$configSize = \$configData | Where-Object { \$_ -match 'ConfigSize=' } | ForEach-Object { \$_ -replace 'ConfigSize=', '' }
+`$configFile = 'X:\Windows\System32\config.txt'
+if (Test-Path `$configFile) {
+    `$configData = Get-Content `$configFile
+    `$config = `$configData | Where-Object { `$_ -match 'Config=' } | ForEach-Object { `$_ -replace 'Config=', '' }
+    `$configSize = `$configData | Where-Object { `$_ -match 'ConfigSize=' } | ForEach-Object { `$_ -replace 'ConfigSize=', '' }
 } else {
-    \$config = 'Inconnue'
-    \$configSize = '30' # Valeur par défaut
+    `$config = 'Inconnue'
+    `$configSize = '30'
 }
 [System.Windows.Forms.MessageBox]::Show(
     "Conseil pour la gestion des disques :\n\n" +
@@ -574,7 +583,7 @@ if (Test-Path \$configFile) {
     "- Un disque dédié pour le système d'exploitation (OS).\n" +
     "- Un disque séparé pour vos données (documents, jeux, etc.).\n\n" +
     "Si vous n'avez qu'un seul disque, il est recommandé de le partitionner en deux :\n" +
-    "- Une partition pour l'OS d'une taille d'au moins \$configSize Go (taille recommandée pour la configuration '\$config' + 15 Go de marge).\n" +
+    "- Une partition pour l'OS d'une taille d'au moins `$configSize Go (taille recommandée pour la configuration '`$config' + 15 Go de marge).\n" +
     "- Une partition pour les données avec le reste de l'espace disponible.\n\n" +
     "Vous pouvez créer ou modifier les partitions dans l'écran suivant.",
     "Conseil - Gestion des disques",
@@ -584,14 +593,14 @@ if (Test-Path \$configFile) {
 "@
 $diskAdviceScript | Out-File -FilePath "$bootMountPath\Windows\System32\DiskAdvice.ps1" -Encoding utf8
 
-# Création du fichier config.txt avec $config et $configSize
+# Création du fichier config.txt
 $configText = @"
 Config=$config
 ConfigSize=$configSize
 "@
 $configText | Out-File -FilePath "$bootMountPath\Windows\System32\config.txt" -Encoding ascii
 
-# Modification de startnet.cmd pour exécuter le script de conseil
+# Modification de startnet.cmd
 Log-Message "Modification de startnet.cmd..." -Step "Personnalisation de WinPE"
 $startnetPath = "$bootMountPath\Windows\System32\startnet.cmd"
 $startnetContent = @"
@@ -603,14 +612,21 @@ $startnetContent | Out-File -FilePath $startnetPath -Encoding ascii
 
 # Démontage de boot.wim
 Log-Message "Démontage de boot.wim..." -Step "Personnalisation de WinPE"
-dism /Unmount-Image /MountDir:$bootMountPath /Commit
+Start-Process -FilePath "dism" -ArgumentList "/Unmount-Image /MountDir:$bootMountPath /Commit" -Wait -NoNewWindow
 Remove-Item -Path $bootMountPath -Recurse -Force -ErrorAction SilentlyContinue
 
 # Montage de l'image Windows
 Log-Message "Montage de l'image Windows..." -Step "Montage de l'image"
 Update-Progress -Percent 40
 $imagePath = "$tempDir\sources\install.wim"
-dism /Mount-Image /ImageFile:$imagePath /Index:1 /MountDir:$mountPath /Optimize
+try {
+    Start-Process -FilePath "dism" -ArgumentList "/Mount-Image /ImageFile:$imagePath /Index:1 /MountDir:$mountPath /Optimize" -Wait -NoNewWindow -ErrorAction Stop
+}
+catch {
+    Log-Message "Échec du montage de install.wim : $_" -Step "Montage de l'image"
+    [System.Windows.Forms.MessageBox]::Show("Échec du montage de install.wim. Vérifiez les permissions.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    exit
+}
 
 # Application des optimisations
 Log-Message "Application des optimisations..." -Step "Optimisations"
@@ -618,23 +634,22 @@ Update-Progress -Percent 50
 
 if ($telemetry) {
     Log-Message "Blocage de la télémétrie..." -Step "Optimisations"
-    # Exemple : désactivation des services de télémétrie
-    dism /Image:$mountPath /Disable-Feature /FeatureName:Windows-Telemetry /Remove
+    Start-Process -FilePath "dism" -ArgumentList "/Image:$mountPath /Disable-Feature /FeatureName:Windows-Telemetry /Remove" -Wait -NoNewWindow
 }
 
 if ($defender) {
     Log-Message "Désactivation de Defender..." -Step "Optimisations"
-    dism /Image:$mountPath /Disable-Feature /FeatureName:Windows-Defender-Default-Definitions /Remove
+    Start-Process -FilePath "dism" -ArgumentList "/Image:$mountPath /Disable-Feature /FeatureName:Windows-Defender-Default-Definitions /Remove" -Wait -NoNewWindow
 }
 
 if ($edge) {
     Log-Message "Suppression de Edge..." -Step "Optimisations"
-    dism /Image:$mountPath /Remove-Package /PackageName:Microsoft-Windows-Internet-Browser-Package
+    Start-Process -FilePath "dism" -ArgumentList "/Image:$mountPath /Remove-Package /PackageName:Microsoft-Windows-Internet-Browser-Package" -Wait -NoNewWindow
 }
 
 if ($onedrive) {
     Log-Message "Suppression de OneDrive..." -Step "Optimisations"
-    dism /Image:$mountPath /Remove-Package /PackageName:Microsoft-Windows-OneDrive-Package
+    Start-Process -FilePath "dism" -ArgumentList "/Image:$mountPath /Remove-Package /PackageName:Microsoft-Windows-OneDrive-Package" -Wait -NoNewWindow
 }
 
 # Configuration du compte local
@@ -647,8 +662,8 @@ Password = ""
 "@
 $autologon | Out-File -FilePath "$mountPath\Windows\System32\oobe\info\autologon.inf" -Encoding ascii
 
-# Ajout du fond d'écran
-if ($wallpaper) {
+# Ajout du fond d'écran (facultatif)
+if ($wallpaper -and (Test-Path $wallpaper)) {
     Log-Message "Ajout du fond d'écran..." -Step "Fond d'écran"
     Copy-Item -Path $wallpaper -Destination "$tempDir\Web\Wallpaper\Custom\wallpaper.jpg" -Force
     $wallpaperScript = @"
@@ -677,7 +692,7 @@ if ($drivers) {
     $driverFiles = $drivers -split ";"
     foreach ($driver in $driverFiles) {
         if (Test-Path $driver) {
-            dism /Image:$mountPath /Add-Driver /Driver:$driver
+            Start-Process -FilePath "dism" -ArgumentList "/Image:$mountPath /Add-Driver /Driver:$driver" -Wait -NoNewWindow
         }
     }
 }
@@ -738,7 +753,7 @@ $unattend | Out-File -FilePath "$tempDir\sources\`$OEM$\$$\unattend.xml" -Encodi
 # Démontage de l'image
 Log-Message "Démontage de l'image..." -Step "Démontage"
 Update-Progress -Percent 70
-dism /Unmount-Image /MountDir:$mountPath /Commit
+Start-Process -FilePath "dism" -ArgumentList "/Unmount-Image /MountDir:$mountPath /Commit" -Wait -NoNewWindow
 
 # Création de l'ISO
 Log-Message "Création de l'ISO..." -Step "Création ISO"
@@ -750,19 +765,69 @@ Log-Message "ISO générée avec succès dans $isoOutput" -Step "Création ISO"
 
 # Création de la clé USB si sélectionnée
 if ($usb) {
-    Log-Message "Création de la clé USB..." -Step "Clé USB"
+    Log-Message "Détection des clés USB..." -Step "Clé USB"
     Update-Progress -Percent 90
-    $usbDrive = (Get-Disk | Where-Object { $_.BusType -eq "USB" } | Get-Partition | Get-Volume).DriveLetter
-    if ($usbDrive) {
-        Format-Volume -DriveLetter $usbDrive -FileSystem FAT32 -Force -Confirm:$false
-        Mount-DiskImage -ImagePath $isoOutput
-        $isoDrive = (Get-DiskImage -ImagePath $isoOutput | Get-Volume).DriveLetter
-        Copy-Item -Path "$($isoDrive):\*" -Destination "$($usbDrive):\" -Recurse -Force
-        Dismount-DiskImage -ImagePath $isoOutput
-        Log-Message "Clé USB créée avec succès." -Step "Clé USB"
+    $usbDrives = Get-Disk | Where-Object { $_.BusType -eq "USB" } | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter }
+    if ($usbDrives) {
+        $usbList = $usbDrives | ForEach-Object { "$($_.DriveLetter): ($($_.FileSystemLabel) - $([math]::Round($_.Size / 1GB, 2)) Go)" }
+        $usbForm = New-Object System.Windows.Forms.Form
+        $usbForm.Text = "Sélectionner une clé USB"
+        $usbForm.Size = New-Object System.Drawing.Size(400, 200)
+        $usbForm.StartPosition = "CenterScreen"
+
+        $usbLabel = New-Object System.Windows.Forms.Label
+        $usbLabel.Location = New-Object System.Drawing.Point(10, 20)
+        $usbLabel.Size = New-Object System.Drawing.Size(360, 20)
+        $usbLabel.Text = "Choisissez une clé USB à formater :"
+        $usbForm.Controls.Add($usbLabel)
+
+        $usbComboBox = New-Object System.Windows.Forms.ComboBox
+        $usbComboBox.Location = New-Object System.Drawing.Point(10, 50)
+        $usbComboBox.Size = New-Object System.Drawing.Size(360, 20)
+        $usbComboBox.Items.AddRange($usbList)
+        $usbComboBox.SelectedIndex = 0
+        $usbForm.Controls.Add($usbComboBox)
+
+        $usbOkButton = New-Object System.Windows.Forms.Button
+        $usbOkButton.Location = New-Object System.Drawing.Point(10, 100)
+        $usbOkButton.Size = New-Object System.Drawing.Size(75, 23)
+        $usbOkButton.Text = "OK"
+        $usbOkButton.Add_Click({
+            $script:selectedUsb = $usbComboBox.SelectedItem
+            $usbForm.Close()
+        })
+        $usbForm.Controls.Add($usbOkButton)
+
+        $usbCancelButton = New-Object System.Windows.Forms.Button
+        $usbCancelButton.Location = New-Object System.Drawing.Point(90, 100)
+        $usbCancelButton.Size = New-Object System.Drawing.Size(75, 23)
+        $usbCancelButton.Text = "Annuler"
+        $usbCancelButton.Add_Click({
+            $script:selectedUsb = $null
+            $usbForm.Close()
+        })
+        $usbForm.Controls.Add($usbCancelButton)
+
+        $usbForm.ShowDialog()
+
+        if ($script:selectedUsb) {
+            $usbDriveLetter = $script:selectedUsb -replace ":.*", ""
+            Log-Message "Formatage de la clé USB $usbDriveLetter..." -Step "Clé USB"
+            [System.Windows.Forms.MessageBox]::Show("ATTENTION : Le formatage de la clé USB ($usbDriveLetter) supprimera TOUTES les données. Assurez-vous d'avoir sauvegardé vos fichiers.", "Avertissement", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            Format-Volume -DriveLetter $usbDriveLetter -FileSystem FAT32 -Force -Confirm:$false
+            Mount-DiskImage -ImagePath $isoOutput
+            $isoDrive = (Get-DiskImage -ImagePath $isoOutput | Get-Volume).DriveLetter
+            Copy-Item -Path "$($isoDrive):\*" -Destination "$($usbDriveLetter):\" -Recurse -Force
+            Dismount-DiskImage -ImagePath $isoOutput
+            Log-Message "Clé USB créée avec succès sur $usbDriveLetter." -Step "Clé USB"
+        }
+        else {
+            Log-Message "Aucune clé USB sélectionnée." -Step "Clé USB"
+        }
     }
     else {
         Log-Message "Aucune clé USB détectée." -Step "Clé USB"
+        [System.Windows.Forms.MessageBox]::Show("Aucune clé USB détectée.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     }
 }
 
