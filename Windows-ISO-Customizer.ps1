@@ -1,7 +1,7 @@
-# CustomWindowsISO_Enhanced_NoARM64.ps1
-# Script PowerShell pour personnaliser une ISO Windows 11 (x64 uniquement) avec message de conseil dans WinPE
-# Mode hors ligne obligatoire, Windows 10 et ARM64 supprimés, encodage UTF-8 renforcé, sélection de clé USB
-# Liens via lecrabeinfo.net, support des packs de langue pour autres langues
+# CustomWindowsISO_Flexible.ps1
+# Script PowerShell pour personnaliser une ISO Windows 10/11 (x64) avec message de conseil dans WinPE
+# Mode hors ligne/en ligne, choix du chemin de sortie, encodage UTF-8 BOM, sélection de clé USB
+# Liens via lecrabeinfo.net, support des packs de langue, Windows 10 réintroduit
 
 # Forcer l'encodage UTF-8 globalement
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
@@ -23,6 +23,11 @@ if (-not (Test-Admin)) {
     exit
 }
 
+# Vérification de l'encodage système
+if ([Console]::OutputEncoding.CodePage -ne 65001) {
+    [System.Windows.Forms.MessageBox]::Show("Encodage non-UTF-8 détecté (CodePage: $([Console]::OutputEncoding.CodePage)). Les accents peuvent mal s'afficher. Essayez PowerShell 7 ou cochez 'Forcer ASCII'.", "Avertissement", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+}
+
 # Fonction pour journaliser les messages
 function Log-Message {
     param (
@@ -34,7 +39,12 @@ function Log-Message {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logEntry = "[$timestamp] $Step : $Message"
     Write-Host $logEntry
-    $logEntry | Out-File -FilePath "C:\Output\CustomizationLog.txt" -Append -Encoding utf8
+    if ($script:forceAscii) {
+        $logEntry | Out-File -FilePath "$script:outputDir\CustomizationLog.txt" -Append -Encoding ascii
+    }
+    else {
+        $logEntry | Out-File -FilePath "$script:outputDir\CustomizationLog.txt" -Append -Encoding utf8bom
+    }
 }
 
 # Fonction pour mettre à jour la barre de progression
@@ -56,9 +66,6 @@ function Test-MD5Hash {
     return $hash.Hash -eq $ExpectedMD5
 }
 
-# Création du dossier de sortie
-$null = New-Item -ItemType Directory -Path "C:\Output" -Force
-
 # Configurations disponibles
 $configs = @(
     [PSCustomObject]@{ Name = "Ultra-léger (8-10 Go, minimaliste, services réduits)"; Size = 25 }
@@ -69,10 +76,12 @@ $configs = @(
 
 # Liens pour les ISO (valides jusqu'au 22/04/2025)
 $isoLinks = @{
-    "24H2" = @{ Url = "https://wid.lecrabeinfo.net/?file=Win11_24H2_French_x64"; MD5 = "" }
-    "23H2" = @{ Url = "https://dl.lecrabeinfo.net/Windows/Windows%2011/23H2/Win11_23H2_French_x64v2.iso?md5=f2bi-dI2b8wjfcozkC-jMA&expires=1745319816"; MD5 = "f2bi-dI2b8wjfcozkC-jMA" }
-    "22H2" = @{ Url = "https://dl.lecrabeinfo.net/Windows/Windows%2011/22H2/Win11_22H2_French_x64v2.iso?md5=aHugrHcaj18nPZDwHS4k8A&expires=1745320329"; MD5 = "aHugrHcaj18nPZDwHS4k8A" }
-    "21H2" = @{ Url = "https://dl.lecrabeinfo.net/s/BmmiremFpkjfKp2/download/Win11_French_x64.iso?md5=BXe108EZtEu7_dgB7RO3Lg&expires=1745322987"; MD5 = "BXe108EZtEu7_dgB7RO3Lg" }
+    "Windows11_24H2" = @{ Url = "https://wid.lecrabeinfo.net/?file=Win11_24H2_French_x64"; MD5 = "" }
+    "Windows11_23H2" = @{ Url = "https://dl.lecrabeinfo.net/Windows/Windows%2011/23H2/Win11_23H2_French_x64v2.iso?md5=f2bi-dI2b8wjfcozkC-jMA&expires=1745319816"; MD5 = "f2bi-dI2b8wjfcozkC-jMA" }
+    "Windows11_22H2" = @{ Url = "https://dl.lecrabeinfo.net/Windows/Windows%2011/22H2/Win11_22H2_French_x64v2.iso?md5=aHugrHcaj18nPZDwHS4k8A&expires=1745320329"; MD5 = "aHugrHcaj18nPZDwHS4k8A" }
+    "Windows11_21H2" = @{ Url = "https://dl.lecrabeinfo.net/s/BmmiremFpkjfKp2/download/Win11_French_x64.iso?md5=BXe108EZtEu7_dgB7RO3Lg&expires=1745322987"; MD5 = "BXe108EZtEu7_dgB7RO3Lg" }
+    "Windows10_22H2" = @{ Url = "https://wid.lecrabeinfo.net/?file=Win10_22H2_French_x64"; MD5 = "" }
+    "Windows10_21H2" = @{ Url = "https://wid.lecrabeinfo.net/?file=Win10_21H2_French_x64"; MD5 = "" }
 }
 
 # Création de l'interface graphique
@@ -80,8 +89,8 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Personnalisation ISO Windows 11 (x64)"
-$form.Size = New-Object System.Drawing.Size(800, 600)
+$form.Text = "Personnalisation ISO Windows 10/11 (x64)"
+$form.Size = New-Object System.Drawing.Size(800, 650)
 $form.StartPosition = "CenterScreen"
 $form.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 
@@ -96,9 +105,19 @@ $form.Controls.Add($versionLabel)
 $versionComboBox = New-Object System.Windows.Forms.ComboBox
 $versionComboBox.Location = New-Object System.Drawing.Point(160, 20)
 $versionComboBox.Size = New-Object System.Drawing.Size(200, 20)
-$versionComboBox.Items.AddRange(@("Windows 11"))
-$versionComboBox.SelectedIndex = 0
+$versionComboBox.Items.AddRange(@("Windows 10", "Windows 11"))
+$versionComboBox.SelectedIndex = 1
 $versionComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$versionComboBox.Add_SelectedIndexChanged({
+    $releaseComboBox.Items.Clear()
+    if ($versionComboBox.SelectedItem -eq "Windows 11") {
+        $releaseComboBox.Items.AddRange(@("24H2", "23H2", "22H2", "21H2"))
+    }
+    else {
+        $releaseComboBox.Items.AddRange(@("22H2", "21H2"))
+    }
+    $releaseComboBox.SelectedIndex = 0
+})
 $form.Controls.Add($versionComboBox)
 
 $architectureLabel = New-Object System.Windows.Forms.Label
@@ -295,43 +314,111 @@ $driversButton.Add_Click({
 })
 $form.Controls.Add($driversButton)
 
+$outputLabel = New-Object System.Windows.Forms.Label
+$outputLabel.Location = New-Object System.Drawing.Point(10, 320)
+$outputLabel.Size = New-Object System.Drawing.Size(150, 20)
+$outputLabel.Text = "Dossier de sortie :"
+$outputLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$form.Controls.Add($outputLabel)
+
+$outputTextBox = New-Object System.Windows.Forms.TextBox
+$outputTextBox.Location = New-Object System.Drawing.Point(160, 320)
+$outputTextBox.Size = New-Object System.Drawing.Size(150, 20)
+$outputTextBox.Text = "C:\Output"
+$outputTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$form.Controls.Add($outputTextBox)
+
+$outputButton = New-Object System.Windows.Forms.Button
+$outputButton.Location = New-Object System.Drawing.Point(320, 320)
+$outputButton.Size = New-Object System.Drawing.Size(40, 20)
+$outputButton.Text = "..."
+$outputButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$outputButton.Add_Click({
+    $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+    $folderBrowser.Description = "Sélectionnez le dossier de sortie pour l'ISO et les logs"
+    $folderBrowser.SelectedPath = "C:\"
+    if ($folderBrowser.ShowDialog() -eq "OK") {
+        $outputTextBox.Text = $folderBrowser.SelectedPath
+    }
+})
+$form.Controls.Add($outputButton)
+
+$tempDirLabel = New-Object System.Windows.Forms.Label
+$tempDirLabel.Location = New-Object System.Drawing.Point(10, 350)
+$tempDirLabel.Size = New-Object System.Drawing.Size(150, 20)
+$tempDirLabel.Text = "Dossier temporaire :"
+$tempDirLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$form.Controls.Add($tempDirLabel)
+
+$tempDirTextBox = New-Object System.Windows.Forms.TextBox
+$tempDirTextBox.Location = New-Object System.Drawing.Point(160, 350)
+$tempDirTextBox.Size = New-Object System.Drawing.Size(150, 20)
+$tempDirTextBox.Text = "C:\Temp"
+$tempDirTextBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$form.Controls.Add($tempDirTextBox)
+
+$tempDirButton = New-Object System.Windows.Forms.Button
+$tempDirButton.Location = New-Object System.Drawing.Point(320, 350)
+$tempDirButton.Size = New-Object System.Drawing.Size(40, 20)
+$tempDirButton.Text = "..."
+$tempDirButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$tempDirButton.Add_Click({
+    $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
+    $folderBrowser.Description = "Sélectionnez le dossier pour les fichiers temporaires"
+    $folderBrowser.SelectedPath = "C:\"
+    if ($folderBrowser.ShowDialog() -eq "OK") {
+        $tempDirTextBox.Text = $folderBrowser.SelectedPath
+    }
+})
+$form.Controls.Add($tempDirButton)
+
 $offlineCheckBox = New-Object System.Windows.Forms.CheckBox
-$offlineCheckBox.Location = New-Object System.Drawing.Point(10, 320)
+$offlineCheckBox.Location = New-Object System.Windows.Forms.Point(10, 380)
 $offlineCheckBox.Size = New-Object System.Drawing.Size(150, 20)
 $offlineCheckBox.Text = "Mode hors ligne"
 $offlineCheckBox.Checked = $true
-$offlineCheckBox.Enabled = $false # Mode hors ligne forcé
 $offlineCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $offlineCheckBox.Add_CheckedChanged({
-    $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-    $openFileDialog.Filter = "Fichiers ISO (*.iso)|*.iso"
-    if ($openFileDialog.ShowDialog() -eq "OK") {
-        $script:isoPath = $openFileDialog.FileName
-    }
-    else {
-        [System.Windows.Forms.MessageBox]::Show("Veuillez sélectionner une ISO Windows 11.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-        $form.Close()
-        exit
+    if ($offlineCheckBox.Checked) {
+        $openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+        $openFileDialog.Filter = "Fichiers ISO (*.iso)|*.iso"
+        if ($openFileDialog.ShowDialog() -eq "OK") {
+            $script:isoPath = $openFileDialog.FileName
+        }
+        else {
+            [System.Windows.Forms.MessageBox]::Show("Veuillez sélectionner une ISO.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+            $offlineCheckBox.Checked = $false
+        }
     }
 })
 $form.Controls.Add($offlineCheckBox)
 
 $usbCheckBox = New-Object System.Windows.Forms.CheckBox
-$usbCheckBox.Location = New-Object System.Drawing.Point(160, 320)
+$usbCheckBox.Location = New-Object System.Drawing.Point(160, 380)
 $usbCheckBox.Size = New-Object System.Drawing.Size(150, 20)
 $usbCheckBox.Text = "Créer clé USB"
 $usbCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($usbCheckBox)
 
+$asciiCheckBox = New-Object System.Windows.Forms.CheckBox
+$asciiCheckBox.Location = New-Object System.Windows.Forms.Point(310, 380)
+$asciiCheckBox.Size = New-Object System.Drawing.Size(150, 20)
+$asciiCheckBox.Text = "Forcer ASCII"
+$asciiCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
+$asciiCheckBox.Add_CheckedChanged({
+    $script:forceAscii = $asciiCheckBox.Checked
+})
+$form.Controls.Add($asciiCheckBox)
+
 $advancedLabel = New-Object System.Windows.Forms.Label
-$advancedLabel.Location = New-Object System.Drawing.Point(10, 350)
+$advancedLabel.Location = New-Object System.Drawing.Point(10, 410)
 $advancedLabel.Size = New-Object System.Drawing.Size(150, 20)
 $advancedLabel.Text = "Options avancées :"
 $advancedLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($advancedLabel)
 
 $telemetryCheckBox = New-Object System.Windows.Forms.CheckBox
-$telemetryCheckBox.Location = New-Object System.Drawing.Point(160, 350)
+$telemetryCheckBox.Location = New-Object System.Drawing.Point(160, 410)
 $telemetryCheckBox.Size = New-Object System.Drawing.Size(200, 20)
 $telemetryCheckBox.Text = "Bloquer la télémétrie"
 $telemetryCheckBox.Checked = $true
@@ -339,21 +426,21 @@ $telemetryCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($telemetryCheckBox)
 
 $defenderCheckBox = New-Object System.Windows.Forms.CheckBox
-$defenderCheckBox.Location = New-Object System.Drawing.Point(160, 380)
+$defenderCheckBox.Location = New-Object System.Drawing.Point(160, 440)
 $defenderCheckBox.Size = New-Object System.Drawing.Size(200, 20)
 $defenderCheckBox.Text = "Désactiver Defender"
 $defenderCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($defenderCheckBox)
 
 $edgeCheckBox = New-Object System.Windows.Forms.CheckBox
-$edgeCheckBox.Location = New-Object System.Drawing.Point(160, 410)
+$edgeCheckBox.Location = New-Object System.Drawing.Point(160, 470)
 $edgeCheckBox.Size = New-Object System.Drawing.Size(200, 20)
 $edgeCheckBox.Text = "Supprimer Edge"
 $edgeCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($edgeCheckBox)
 
 $onedriveCheckBox = New-Object System.Windows.Forms.CheckBox
-$onedriveCheckBox.Location = New-Object System.Drawing.Point(160, 440)
+$onedriveCheckBox.Location = New-Object System.Drawing.Point(160, 500)
 $onedriveCheckBox.Size = New-Object System.Drawing.Size(200, 20)
 $onedriveCheckBox.Text = "Supprimer OneDrive"
 $onedriveCheckBox.Checked = $true
@@ -361,14 +448,14 @@ $onedriveCheckBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($onedriveCheckBox)
 
 $profileLabel = New-Object System.Windows.Forms.Label
-$profileLabel.Location = New-Object System.Drawing.Point(10, 470)
+$profileLabel.Location = New-Object System.Drawing.Point(10, 530)
 $profileLabel.Size = New-Object System.Drawing.Size(150, 20)
 $profileLabel.Text = "Profil :"
 $profileLabel.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($profileLabel)
 
 $profileComboBox = New-Object System.Windows.Forms.ComboBox
-$profileComboBox.Location = New-Object System.Drawing.Point(160, 470)
+$profileComboBox.Location = New-Object System.Drawing.Point(160, 530)
 $profileComboBox.Size = New-Object System.Drawing.Size(200, 20)
 $profileComboBox.Items.AddRange(@("Nouveau", "Charger existant"))
 $profileComboBox.SelectedIndex = 0
@@ -376,7 +463,7 @@ $profileComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($profileComboBox)
 
 $profileButton = New-Object System.Windows.Forms.Button
-$profileButton.Location = New-Object System.Drawing.Point(370, 470)
+$profileButton.Location = New-Object System.Drawing.Point(370, 530)
 $profileButton.Size = New-Object System.Drawing.Size(100, 20)
 $profileButton.Text = "Enregistrer"
 $profileButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
@@ -392,20 +479,28 @@ $profileButton.Add_Click({
         Wallpaper = $wallpaperTextBox.Text
         Apps = $appsTextBox.Text
         Drivers = $driversTextBox.Text
+        OutputDir = $outputTextBox.Text
+        TempDir = $tempDirTextBox.Text
         Offline = $offlineCheckBox.Checked
         USB = $usbCheckBox.Checked
+        Ascii = $asciiCheckBox.Checked
         Telemetry = $telemetryCheckBox.Checked
         Defender = $defenderCheckBox.Checked
         Edge = $edgeCheckBox.Checked
         OneDrive = $onedriveCheckBox.Checked
     }
-    $profile | ConvertTo-Json | Out-File -FilePath "C:\Output\Profile.json" -Encoding utf8
+    if ($script:forceAscii) {
+        $profile | ConvertTo-Json | Out-File -FilePath "$($outputTextBox.Text)\Profile.json" -Encoding ascii
+    }
+    else {
+        $profile | ConvertTo-Json | Out-File -FilePath "$($outputTextBox.Text)\Profile.json" -Encoding utf8bom
+    }
     [System.Windows.Forms.MessageBox]::Show("Profil enregistré avec succès !", "Succès", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
 })
 $form.Controls.Add($profileButton)
 
 $okButton = New-Object System.Windows.Forms.Button
-$okButton.Location = New-Object System.Drawing.Point(10, 500)
+$okButton.Location = New-Object System.Drawing.Point(10, 560)
 $okButton.Size = New-Object System.Drawing.Size(75, 23)
 $okButton.Text = "OK"
 $okButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
@@ -420,13 +515,31 @@ $okButton.Add_Click({
     $script:wallpaper = $wallpaperTextBox.Text
     $script:apps = $appsTextBox.Text
     $script:drivers = $driversTextBox.Text
+    $script:outputDir = $outputTextBox.Text
+    $script:tempDir = $tempDirTextBox.Text
     $script:offline = $offlineCheckBox.Checked
     $script:usb = $usbCheckBox.Checked
+    $script:forceAscii = $asciiCheckBox.Checked
     $script:telemetry = $telemetryCheckBox.Checked
     $script:defender = $defenderCheckBox.Checked
     $script:edge = $edgeCheckBox.Checked
     $script:onedrive = $onedriveCheckBox.Checked
-    if (-not $script:isoPath -or -not (Test-Path $script:isoPath)) {
+
+    # Vérification de l'espace disque
+    $driveLetter = ($outputTextBox.Text -split ":")[0]
+    $freeSpace = (Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue).Free / 1GB
+    if (-not $freeSpace -or $freeSpace -lt 20) {
+        [System.Windows.Forms.MessageBox]::Show("Espace disque insuffisant sur $driveLetter. 20 Go requis.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+    $driveLetter = ($tempDirTextBox.Text -split ":")[0]
+    $freeSpace = (Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue).Free / 1GB
+    if (-not $freeSpace -or $freeSpace -lt 20) {
+        [System.Windows.Forms.MessageBox]::Show("Espace disque insuffisant sur $driveLetter. 20 Go requis.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        return
+    }
+
+    if ($offline -and (-not $script:isoPath -or -not (Test-Path $script:isoPath))) {
         [System.Windows.Forms.MessageBox]::Show("Chemin de l'ISO invalide. Veuillez sélectionner une ISO valide.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
         return
     }
@@ -435,7 +548,7 @@ $okButton.Add_Click({
 $form.Controls.Add($okButton)
 
 $cancelButton = New-Object System.Windows.Forms.Button
-$cancelButton.Location = New-Object System.Drawing.Point(90, 500)
+$cancelButton.Location = New-Object System.Drawing.Point(90, 560)
 $cancelButton.Size = New-Object System.Drawing.Size(75, 23)
 $cancelButton.Text = "Annuler"
 $cancelButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
@@ -447,94 +560,88 @@ $cancelButton.Add_Click({
 $form.Controls.Add($cancelButton)
 
 $helpButton = New-Object System.Windows.Forms.Button
-$helpButton.Location = New-Object System.Drawing.Point(170, 500)
+$helpButton.Location = New-Object System.Drawing.Point(170, 560)
 $helpButton.Size = New-Object System.Drawing.Size(75, 23)
 $helpButton.Text = "Aide"
 $helpButton.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $helpButton.Add_Click({
-    $helpFile = "C:\Output\Help.html"
+    $helpFile = "$($outputTextBox.Text)\Help.html"
     $helpContent = @"
     <html>
-    <head><title>Aide - Personnalisation ISO Windows 11</title></head>
+    <head><title>Aide - Personnalisation ISO Windows 10/11</title></head>
     <body>
-    <h1>Guide de personnalisation de l'ISO Windows 11 (x64)</h1>
-    <p>Ce script permet de créer une ISO Windows 11 personnalisée (x64 uniquement).</p>
+    <h1>Guide de personnalisation de l'ISO Windows 10/11 (x64)</h1>
+    <p>Ce script permet de créer une ISO Windows 10 ou 11 personnalisée (x64 uniquement).</p>
     <h2>Prérequis</h2>
     <ul>
-        <li>20 Go d'espace libre sur C:</li>
-        <li>Une ISO Windows 11 téléchargée manuellement</li>
+        <li>20 Go d'espace libre sur le disque de sortie et temporaire</li>
+        <li>Une ISO Windows 10/11 (mode hors ligne) ou connexion Internet (mode en ligne)</li>
         <li>Windows ADK avec WinPE Add-ons (installé automatiquement)</li>
         <li>8 Go de RAM recommandé</li>
     </ul>
     <h2>Sources pour les ISO (français, x64)</h2>
     <ul>
-        <li>Visitez <a href="https://wid.lecrabeinfo.net/">wid.lecrabeinfo.net</a> pour télécharger les ISO Windows 11 (24H2, 23H2, 22H2, 21H2).</li>
+        <li>Visitez <a href="https://wid.lecrabeinfo.net/">wid.lecrabeinfo.net</a> pour télécharger les ISO.</li>
         <li>Exemples de liens (valides jusqu'au 22/04/2025) :</li>
         <ul>
-            <li>24H2: <a href="$($isoLinks['24H2'].Url)">Win11_24H2_French_x64.iso</a></li>
-            <li>23H2: <a href="$($isoLinks['23H2'].Url)">Win11_23H2_French_x64v2.iso</a> (MD5: $($isoLinks['23H2'].MD5))</li>
-            <li>22H2: <a href="$($isoLinks['22H2'].Url)">Win11_22H2_French_x64v2.iso</a> (MD5: $($isoLinks['22H2'].MD5))</li>
-            <li>21H2: <a href="$($isoLinks['21H2'].Url)">Win11_French_x64.iso</a> (MD5: $($isoLinks['21H2'].MD5))</li>
+            <li>Windows 11 24H2: <a href="$($isoLinks['Windows11_24H2'].Url)">Win11_24H2_French_x64.iso</a></li>
+            <li>Windows 11 23H2: <a href="$($isoLinks['Windows11_23H2'].Url)">Win11_23H2_French_x64v2.iso</a> (MD5: $($isoLinks['Windows11_23H2'].MD5))</li>
+            <li>Windows 11 22H2: <a href="$($isoLinks['Windows11_22H2'].Url)">Win11_22H2_French_x64v2.iso</a> (MD5: $($isoLinks['Windows11_22H2'].MD5))</li>
+            <li>Windows 11 21H2: <a href="$($isoLinks['Windows11_21H2'].Url)">Win11_French_x64.iso</a> (MD5: $($isoLinks['Windows11_21H2'].MD5))</li>
+            <li>Windows 10 22H2: <a href="$($isoLinks['Windows10_22H2'].Url)">Win10_22H2_French_x64.iso</a></li>
+            <li>Windows 10 21H2: <a href="$($isoLinks['Windows10_21H2'].Url)">Win10_21H2_French_x64.iso</a></li>
         </ul>
-        <li><b>Note</b> : Les liens expirent après ~24h. Consultez régulièrement <a href="https://lecrabeinfo.net">lecrabeinfo.net</a> pour de nouveaux liens.</li>
-        <li><b>Autres langues</b> : Les ISO sont en français. Pour d'autres langues, téléchargez des packs de langue (.cab) depuis <a href="https://uupdump.net">uupdump.net</a> ou miroirs communautaires, et ajoutez-les via l'option 'Pack de langue'.</li>
+        <li><b>Note</b> : Les liens expirent après ~24h. Consultez <a href="https://lecrabeinfo.net">lecrabeinfo.net</a>.</li>
+        <li><b>Autres langues</b> : ISO en français. Packs de langue (.cab) via <a href="https://uupdump.net">uupdump.net</a>.</li>
+        <li><b>Mode en ligne</b> : Utilisez un VPN/proxy pour éviter les bans IP. Téléchargement via miroirs tiers.</li>
     </ul>
     <h2>Options</h2>
     <ul>
-        <li><b>Mode hors ligne</b> : Sélectionnez une ISO Windows 11 existante (obligatoire).</li>
-        <li><b>Release</b> : Choisissez la version (24H2, 23H2, 22H2, 21H2).</li>
-        <li><b>Langue</b> : Sélectionnez la langue de l'OS. ISO en français, mais packs de langue (.cab) supportés.</li>
-        <li><b>Configuration</b> : Choisissez entre Ultra-léger, Léger, Gaming, ou Standard.</li>
+        <li><b>Mode hors ligne</b> : Sélectionnez une ISO existante.</li>
+        <li><b>Mode en ligne</b> : Télécharge via miroirs tiers (VPN recommandé).</li>
+        <li><b>Version</b> : Windows 10 ou 11.</li>
+        <li><b>Release</b> : Choisissez la version (ex. : 24H2, 22H2).</li>
+        <li><b>Langue</b> : ISO en français, packs de langue supportés.</li>
+        <li><b>Configuration</b> : Ultra-léger, Léger, Gaming, Standard.</li>
         <li><b>Compte local</b> : Définissez un compte administrateur.</li>
-        <li><b>Fond d'écran</b> : Ajoutez une image personnalisée (JPG/PNG, facultatif).</li>
-        <li><b>Applications/Pilotes</b> : Intégrez des logiciels ou pilotes.</li>
-        <li><b>Options avancées</b> : Bloquez la télémétrie, désactivez Defender, etc.</li>
-        <li><b>Clé USB</b> : Créez une clé bootable (choix de la clé).</li>
-        <li><b>Profils</b> : Enregistrez/chargez des configurations.</li>
-        <li><b>Message de conseil</b> : Un message s'affichera au début de l'installation.</li>
+        <li><b>Fond d'écran</b> : Image personnalisée (JPG/PNG).</li>
+        <li><b>Applications/Pilotes</b> : Intégrez logiciels/pilotes.</li>
+        <li><b>Dossier de sortie</b> : Où sauvegarder l'ISO et logs.</li>
+        <li><b>Dossier temporaire</b> : Où stocker les fichiers temporaires.</li>
+        <li><b>Forcer ASCII</b> : Si les accents posent problème.</li>
+        <li><b>Clé USB</b> : Créez une clé bootable.</li>
+        <li><b>Options avancées</b> : Télémétrie, Defender, etc.</li>
+        <li><b>Profils</b> : Enregistrez/chargez configurations.</li>
+        <li><b>Message de conseil</b> : Affiché au début de l'installation.</li>
     </ul>
-    <p>Pour plus d'aide, consultez le journal dans C:\Output\CustomizationLog.txt.</p>
+    <p>Journal dans [Dossier de sortie]\CustomizationLog.txt.</p>
     </body>
     </html>
 "@
-    $helpContent | Out-File -FilePath $helpFile -Encoding utf8
+    if ($script:forceAscii) {
+        $helpContent | Out-File -FilePath $helpFile -Encoding ascii
+    }
+    else {
+        $helpContent | Out-File -FilePath $helpFile -Encoding utf8bom
+    }
     Start-Process $helpFile
 })
 $form.Controls.Add($helpButton)
 
 $progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(10, 530)
+$progressBar.Location = New-Object System.Drawing.Point(10, 590)
 $progressBar.Size = New-Object System.Drawing.Size(760, 23)
 $progressBar.Minimum = 0
 $progressBar.Maximum = 100
 $form.Controls.Add($progressBar)
 
-# Forcer la sélection de l'ISO au démarrage
-$openFileDialog = New-Object System.Windows.Forms.OpenFileDialog
-$openFileDialog.Filter = "Fichiers ISO (*.iso)|*.iso"
-if ($openFileDialog.ShowDialog() -ne "OK") {
-    [System.Windows.Forms.MessageBox]::Show("Veuillez sélectionner une ISO Windows 11. Consultez l'aide pour les liens de téléchargement.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-    exit
-}
-$script:isoPath = $openFileDialog.FileName
-
-# Vérification MD5 si applicable
-$selectedRelease = $releaseComboBox.SelectedItem
-if ($isoLinks[$selectedRelease] -and $isoLinks[$selectedRelease].MD5) {
-    Log-Message "Vérification du hachage MD5 de l'ISO..." -Step "Vérification ISO"
-    if (-not (Test-MD5Hash -FilePath $script:isoPath -ExpectedMD5 $isoLinks[$selectedRelease].MD5)) {
-        [System.Windows.Forms.MessageBox]::Show("L'ISO sélectionnée ne correspond pas au hachage MD5 attendu ($($isoLinks[$selectedRelease].MD5)). Veuillez vérifier le fichier.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-        exit
-    }
-    Log-Message "Hachage MD5 vérifié avec succès." -Step "Vérification ISO"
-}
-
 # Affichage de la fenêtre
 $form.ShowDialog()
 
 # Variables globales
-$tempDir = "C:\Temp"
-$mountPath = "C:\Mount"
+$tempDir = $script:tempDir
+$mountPath = Join-Path $script:tempDir "Mount"
+$outputDir = $script:outputDir
 $isoPath = $script:isoPath
 $keepTempFiles = $false
 $languageName = switch ($language) {
@@ -553,21 +660,38 @@ $edition = "Pro"
 $oscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
 $configSize = ($configs | Where-Object { $_.Name -eq $config }).Size
 
-# Vérification de l'espace disque
-$freeSpace = (Get-PSDrive -Name C).Free / 1GB
-if ($freeSpace -lt 20) {
-    [System.Windows.Forms.MessageBox]::Show("Espace disque insuffisant sur C:. 20 Go requis.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
-    exit
-}
+# Création des dossiers
+Log-Message "Création des dossiers de sortie et temporaires..." -Step "Préparation"
+$null = New-Item -ItemType Directory -Path $outputDir, $tempDir, $mountPath -Force
 
-# Vérification des permissions sur les dossiers temporaires
-Log-Message "Vérification des permissions sur les dossiers temporaires..." -Step "Préparation"
-$null = New-Item -ItemType Directory -Path $tempDir, $mountPath -Force
+# Vérification des permissions
+Log-Message "Vérification des permissions..." -Step "Préparation"
 $acl = Get-Acl -Path $tempDir
 $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
 $acl.SetAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
 Set-Acl -Path $tempDir -AclObject $acl
 Set-Acl -Path $mountPath -AclObject $acl
+Set-Acl -Path $outputDir -AclObject $acl
+
+# Mode en ligne : Téléchargement via miroir tiers
+if (-not $offline) {
+    Log-Message "Mode en ligne : Tentative de téléchargement via miroir tiers..." -Step "Téléchargement ISO"
+    [System.Windows.Forms.MessageBox]::Show("Mode en ligne : Utilisez un VPN/proxy pour éviter les bans IP. Téléchargement depuis un miroir tiers.", "Avertissement", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+    # TODO : Implémenter téléchargement via uupdump.net ou autre miroir
+    [System.Windows.Forms.MessageBox]::Show("Téléchargement en ligne non implémenté. Veuillez passer en mode hors ligne.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    exit
+}
+
+# Vérification MD5 si applicable
+$isoKey = "$($version -replace ' ', '')_$release"
+if ($isoLinks[$isoKey] -and $isoLinks[$isoKey].MD5) {
+    Log-Message "Vérification du hachage MD5 de l'ISO..." -Step "Vérification ISO"
+    if (-not (Test-MD5Hash -FilePath $isoPath -ExpectedMD5 $isoLinks[$isoKey].MD5)) {
+        [System.Windows.Forms.MessageBox]::Show("L'ISO sélectionnée ne correspond pas au hachage MD5 attendu ($($isoLinks[$isoKey].MD5)). Veuillez vérifier le fichier.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+        exit
+    }
+    Log-Message "Hachage MD5 vérifié avec succès." -Step "Vérification ISO"
+}
 
 # Installation de Windows ADK si nécessaire
 if (-not (Test-Path $oscdimgPath)) {
@@ -602,7 +726,6 @@ catch {
 # Copie des fichiers dans un dossier temporaire
 Log-Message "Copie des fichiers..." -Step "Copie des fichiers"
 Update-Progress -Percent 35
-New-Item -ItemType Directory -Path $tempDir, $mountPath -Force
 Copy-Item -Path "$($isoDrive):\*" -Destination $tempDir -Recurse -Force
 New-Item -ItemType Directory -Path "$tempDir\Web\Wallpaper\Custom" -Force
 
@@ -665,14 +788,24 @@ if (Test-Path `$configFile) {
     [System.Windows.Forms.MessageBoxIcon]::Information
 )
 "@
-$diskAdviceScript | Out-File -FilePath "$bootMountPath\Windows\System32\DiskAdvice.ps1" -Encoding utf8
+if ($forceAscii) {
+    $diskAdviceScript | Out-File -FilePath "$bootMountPath\Windows\System32\DiskAdvice.ps1" -Encoding ascii
+}
+else {
+    $diskAdviceScript | Out-File -FilePath "$bootMountPath\Windows\System32\DiskAdvice.ps1" -Encoding utf8bom
+}
 
 # Création du fichier config.txt
 $configText = @"
 Config=$config
 ConfigSize=$configSize
 "@
-$configText | Out-File -FilePath "$bootMountPath\Windows\System32\config.txt" -Encoding ascii
+if ($forceAscii) {
+    $configText | Out-File -FilePath "$bootMountPath\Windows\System32\config.txt" -Encoding ascii
+}
+else {
+    $configText | Out-File -FilePath "$bootMountPath\Windows\System32\config.txt" -Encoding utf8bom
+}
 
 # Modification de startnet.cmd
 Log-Message "Modification de startnet.cmd..." -Step "Personnalisation de WinPE"
@@ -727,12 +860,12 @@ if ($defender) {
     Start-Process -FilePath "dism" -ArgumentList "/Image:$mountPath /Disable-Feature /FeatureName:Windows-Defender-Default-Definitions /Remove" -Wait -NoNewWindow
 }
 
-if ($edge) {
+if ($edge -and $version -eq "Windows 11") {
     Log-Message "Suppression de Edge..." -Step "Optimisations"
     Start-Process -FilePath "dism" -ArgumentList "/Image:$mountPath /Remove-Package /PackageName:Microsoft-Windows-Internet-Browser-Package" -Wait -NoNewWindow
 }
 
-if ($onedrive) {
+if ($onedrive -and $version -eq "Windows 11") {
     Log-Message "Suppression de OneDrive..." -Step "Optimisations"
     Start-Process -FilePath "dism" -ArgumentList "/Image:$mountPath /Remove-Package /PackageName:Microsoft-Windows-OneDrive-Package" -Wait -NoNewWindow
 }
@@ -745,7 +878,12 @@ Enabled = true
 Username = $account
 Password = ""
 "@
-$autologon | Out-File -FilePath "$mountPath\Windows\System32\oobe\info\autologon.inf" -Encoding ascii
+if ($forceAscii) {
+    $autologon | Out-File -FilePath "$mountPath\Windows\System32\oobe\info\autologon.inf" -Encoding ascii
+}
+else {
+    $autologon | Out-File -FilePath "$mountPath\Windows\System32\oobe\info\autologon.inf" -Encoding utf8bom
+}
 
 # Ajout du fond d'écran (facultatif)
 if ($wallpaper -and (Test-Path $wallpaper)) {
@@ -755,7 +893,12 @@ if ($wallpaper -and (Test-Path $wallpaper)) {
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP" /v LockScreenImagePath /t REG_SZ /d "C:\Windows\Web\Wallpaper\Custom\wallpaper.jpg" /f
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP" /v DesktopImagePath /t REG_SZ /d "C:\Windows\Web\Wallpaper\Custom\wallpaper.jpg" /f
 "@
-    $wallpaperScript | Out-File -FilePath "$mountPath\Windows\Setup\Scripts\SetWallpaper.cmd" -Encoding ascii
+    if ($forceAscii) {
+        $wallpaperScript | Out-File -FilePath "$mountPath\Windows\Setup\Scripts\SetWallpaper.cmd" -Encoding ascii
+    }
+    else {
+        $wallpaperScript | Out-File -FilePath "$mountPath\Windows\Setup\Scripts\SetWallpaper.cmd" -Encoding utf8bom
+    }
 }
 
 # Intégration des applications
@@ -833,7 +976,12 @@ $unattend = @"
     </settings>
 </unattend>
 "@
-$unattend | Out-File -FilePath "$tempDir\sources\`$OEM$\$$\unattend.xml" -Encoding utf8
+if ($forceAscii) {
+    $unattend | Out-File -FilePath "$tempDir\sources\`$OEM$\$$\unattend.xml" -Encoding ascii
+}
+else {
+    $unattend | Out-File -FilePath "$tempDir\sources\`$OEM$\$$\unattend.xml" -Encoding utf8bom
+}
 
 # Démontage de l'image
 Log-Message "Démontage de l'image..." -Step "Démontage"
@@ -843,7 +991,7 @@ Start-Process -FilePath "dism" -ArgumentList "/Unmount-Image /MountDir:$mountPat
 # Création de l'ISO
 Log-Message "Création de l'ISO..." -Step "Création ISO"
 Update-Progress -Percent 80
-$isoOutput = "C:\Output\Custom_Windows_11_$edition.iso"
+$isoOutput = "$outputDir\Custom_$version_$edition.iso" -replace " ", "_"
 $oscdimgArgs = "-m -o -u2 -udfver102 -bootdata:2#p0,e,b$tempDir\boot\etfsboot.com#pEF,e,b$tempDir\efi\microsoft\boot\efisys.bin -lCUSTOM_WIN $tempDir $isoOutput"
 Start-Process -FilePath $oscdimgPath -ArgumentList $oscdimgArgs -Wait -NoNewWindow
 Log-Message "ISO générée avec succès dans $isoOutput" -Step "Création ISO"
@@ -854,7 +1002,11 @@ if ($usb) {
     Update-Progress -Percent 90
     $usbDrives = Get-Disk | Where-Object { $_.BusType -eq "USB" } | Get-Partition | Get-Volume | Where-Object { $_.DriveLetter }
     if ($usbDrives) {
-        $usbList = $usbDrives | ForEach-Object { "$($_.DriveLetter): ($($_.FileSystemLabel) - $([math]::Round($_.Size / 1GB, 2)) Go)" }
+        $usbList = $usbDrives | ForEach-Object { 
+            $size = [math]::Round($_.Size / 1GB, 2)
+            $label = if ($_.FileSystemLabel) { $_.FileSystemLabel } else { "Sans nom" }
+            "$($_.DriveLetter): ($label - $size Go)"
+        }
         $usbForm = New-Object System.Windows.Forms.Form
         $usbForm.Text = "Sélectionner une clé USB"
         $usbForm.Size = New-Object System.Drawing.Size(400, 200)
@@ -897,14 +1049,20 @@ if ($usb) {
 
         if ($script:selectedUsb) {
             $usbDriveLetter = $script:selectedUsb -replace ":.*", ""
-            Log-Message "Formatage de la clé USB $usbDriveLetter..." -Step "Clé USB"
-            [System.Windows.Forms.MessageBox]::Show("ATTENTION : Le formatage de la clé USB ($usbDriveLetter) supprimera TOUTES les données. Assurez-vous d'avoir sauvegardé vos fichiers.", "Avertissement", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
-            Format-Volume -DriveLetter $usbDriveLetter -FileSystem FAT32 -Force -Confirm:$false
-            Mount-DiskImage -ImagePath $isoOutput
-            $isoDrive = (Get-DiskImage -ImagePath $isoOutput | Get-Volume).DriveLetter
-            Copy-Item -Path "$($isoDrive):\*" -Destination "$($usbDriveLetter):\" -Recurse -Force
-            Dismount-DiskImage -ImagePath $isoOutput
-            Log-Message "Clé USB créée avec succès sur $usbDriveLetter." -Step "Clé USB"
+            Log-Message "Clé USB sélectionnée : $selectedUsb" -Step "Clé USB"
+            $confirmation = [System.Windows.Forms.MessageBox]::Show("ATTENTION : Le formatage de la clé USB ($usbDriveLetter) supprimera TOUTES les données. Voulez-vous continuer ?", "Confirmation", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            if ($confirmation -eq "Yes") {
+                Log-Message "Formatage de la clé USB $usbDriveLetter..." -Step "Clé USB"
+                Format-Volume -DriveLetter $usbDriveLetter -FileSystem FAT32 -Force -Confirm:$false
+                Mount-DiskImage -ImagePath $isoOutput
+                $isoDrive = (Get-DiskImage -ImagePath $isoOutput | Get-Volume).DriveLetter
+                Copy-Item -Path "$($isoDrive):\*" -Destination "$($usbDriveLetter):\" -Recurse -Force
+                Dismount-DiskImage -ImagePath $isoOutput
+                Log-Message "Clé USB créée avec succès sur $usbDriveLetter." -Step "Clé USB"
+            }
+            else {
+                Log-Message "Formatage de la clé USB annulé." -Step "Clé USB"
+            }
         }
         else {
             Log-Message "Aucune clé USB sélectionnée." -Step "Clé USB"
