@@ -1,6 +1,6 @@
-# CustomWindowsISO_Updated.ps1
-# Script PowerShell pour personnaliser une ISO Windows avec message de conseil dans WinPE
-# Corrections : mode hors ligne par défaut, encodage UTF-8, plus de langues, police compatible
+# CustomWindowsISO_NoWin10.ps1
+# Script PowerShell pour personnaliser une ISO Windows 11 avec message de conseil dans WinPE
+# Windows 10 retiré, mode hors ligne par défaut, encodage UTF-8, plus de langues, police compatible
 
 # Forcer l'encodage UTF-8 globalement
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
@@ -81,7 +81,7 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Personnalisation ISO Windows"
+$form.Text = "Personnalisation ISO Windows 11"
 $form.Size = New-Object System.Drawing.Size(800, 600)
 $form.StartPosition = "CenterScreen"
 $form.Font = New-Object System.Drawing.Font("Segoe UI", 10) # Police compatible UTF-8
@@ -97,7 +97,7 @@ $form.Controls.Add($versionLabel)
 $versionComboBox = New-Object System.Windows.Forms.ComboBox
 $versionComboBox.Location = New-Object System.Drawing.Point(160, 20)
 $versionComboBox.Size = New-Object System.Drawing.Size(200, 20)
-$versionComboBox.Items.AddRange(@("Windows 10", "Windows 11"))
+$versionComboBox.Items.AddRange(@("Windows 11"))
 $versionComboBox.SelectedIndex = 0
 $versionComboBox.Font = New-Object System.Drawing.Font("Segoe UI", 10)
 $form.Controls.Add($versionComboBox)
@@ -418,22 +418,21 @@ $helpButton.Add_Click({
     $helpFile = "C:\Output\Help.html"
     $helpContent = @"
     <html>
-    <head><title>Aide - Personnalisation ISO Windows</title></head>
+    <head><title>Aide - Personnalisation ISO Windows 11</title></head>
     <body>
-    <h1>Guide de personnalisation de l'ISO Windows</h1>
-    <p>Ce script permet de créer une ISO Windows 10/11 personnalisée.</p>
+    <h1>Guide de personnalisation de l'ISO Windows 11</h1>
+    <p>Ce script permet de créer une ISO Windows 11 personnalisée.</p>
     <h2>Prérequis</h2>
     <ul>
         <li>20 Go d'espace libre sur C:</li>
-        <li>Connexion Internet (sauf mode hors ligne)</li>
+        <li>Une ISO Windows 11 téléchargée manuellement pour le mode hors ligne</li>
         <li>Windows ADK avec WinPE Add-ons (installé automatiquement)</li>
         <li>8 Go de RAM recommandé pour montage en mémoire (nécessite ImDisk : https://sourceforge.net/projects/imdisk-toolkit/)</li>
-        <li>Une ISO Windows 10/11 pour le mode hors ligne</li>
     </ul>
     <h2>Options</h2>
     <ul>
-        <li><b>Mode hors ligne</b> : Sélectionnez une ISO existante (recommandé).</li>
-        <li><b>Version/Release</b> : Choisissez Windows 10/11 et la version (ex. : 22H2).</li>
+        <li><b>Mode hors ligne</b> : Sélectionnez une ISO Windows 11 existante (obligatoire).</li>
+        <li><b>Release</b> : Choisissez la version (ex. : 22H2).</li>
         <li><b>Langue</b> : Sélectionnez la langue de l'OS (ex. : Français, Anglais, Allemand).</li>
         <li><b>Configuration</b> : Choisissez entre Ultra-léger, Léger, Gaming, ou Standard.</li>
         <li><b>Compte local</b> : Définissez un compte administrateur.</li>
@@ -480,7 +479,7 @@ $languageName = switch ($language) {
     default { "English" }
 }
 $languageCode = $language -replace ".*\((.*)\)", '$1'
-$edition = if ($version -eq "Windows 10") { "Professional" } else { "Pro" }
+$edition = "Pro" # Toujours Pro pour Windows 11
 $oscdimgPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg\oscdimg.exe"
 $configSize = ($configs | Where-Object { $_.Name -eq $config }).Size
 
@@ -514,7 +513,7 @@ if ($ramDisk -and -not (Get-Command imdisk -ErrorAction SilentlyContinue)) {
 # Téléchargement de l'ISO si non hors ligne
 if (-not $offline) {
     Log-Message "Téléchargement de l'ISO non disponible. Veuillez utiliser le mode hors ligne et sélectionner une ISO." -Step "Téléchargement ISO"
-    [System.Windows.Forms.MessageBox]::Show("Le téléchargement automatique de l'ISO n'est pas disponible. Veuillez cocher 'Mode hors ligne' et sélectionner une ISO Windows 10/11 téléchargée manuellement.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    [System.Windows.Forms.MessageBox]::Show("Le téléchargement automatique de l'ISO n'est pas disponible. Veuillez cocher 'Mode hors ligne' et sélectionner une ISO Windows 11 téléchargée manuellement.", "Erreur", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
     exit
 }
 
@@ -744,7 +743,7 @@ dism /Unmount-Image /MountDir:$mountPath /Commit
 # Création de l'ISO
 Log-Message "Création de l'ISO..." -Step "Création ISO"
 Update-Progress -Percent 80
-$isoOutput = "C:\Output\Custom_Windows_$($version -replace 'Windows ', '')_$edition.iso"
+$isoOutput = "C:\Output\Custom_Windows_11_$edition.iso"
 $oscdimgArgs = "-m -o -u2 -udfver102 -bootdata:2#p0,e,b$tempDir\boot\etfsboot.com#pEF,e,b$tempDir\efi\microsoft\boot\efisys.bin -lCUSTOM_WIN $tempDir $isoOutput"
 Start-Process -FilePath $oscdimgPath -ArgumentList $oscdimgArgs -Wait -NoNewWindow
 Log-Message "ISO générée avec succès dans $isoOutput" -Step "Création ISO"
